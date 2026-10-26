@@ -19,6 +19,7 @@ const m = vi.hoisted(() => ({
   workspace: vi.fn(),
   project: vi.fn(),
   newsletter: vi.fn(),
+  availableNewsletter: vi.fn(),
   posts: vi.fn(),
   assets: vi.fn(),
   create: vi.fn(),
@@ -41,7 +42,10 @@ vi.mock("@/lib/db/prisma", () => ({
   default: {
     workspace: { findUnique: m.workspace },
     project: { findFirst: m.project },
-    newsletter: { findUnique: m.newsletter },
+    newsletter: {
+      findUnique: m.newsletter,
+      findFirst: m.availableNewsletter,
+    },
     socialPost: { findMany: m.posts },
     projectImageAsset: { findMany: m.assets },
     newsletterIssue: { create: m.create, updateMany: m.update },
@@ -129,6 +133,7 @@ beforeEach(() => {
     closedAt: null,
   });
   m.newsletter.mockResolvedValue(NEWSLETTER);
+  m.availableNewsletter.mockResolvedValue({ id: NEWSLETTER.id });
   m.posts.mockResolvedValue([{ text: "Recent post" }]);
   m.assets.mockResolvedValue([]);
   m.eval.mockResolvedValue(1);
@@ -216,6 +221,7 @@ describe("POST newsletter draft-with-ai with an injected fake model", () => {
           workspaceId: NEWSLETTER_WORKSPACE_ID,
         },
         take: 10,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         select: { text: true },
       }),
     );
@@ -304,6 +310,32 @@ describe("POST newsletter draft-with-ai with an injected fake model", () => {
     expect((await draft({ ...INPUT, imageIds: [IMAGE_ID] })).status).toBe(422);
     expect(m.copy).not.toHaveBeenCalled();
     expect(m.generate).not.toHaveBeenCalled();
+  });
+
+  it("rejects personal and non-beta workspaces before reading draft sources", async () => {
+    m.availableNewsletter.mockResolvedValue(null);
+    const response = await draft({
+      ...INPUT,
+      useProjectMemory: true,
+      useRecentSocialPosts: true,
+      imageIds: [IMAGE_ID],
+    });
+    expect(response.status).toBe(404);
+    expect(m.availableNewsletter).toHaveBeenCalledWith({
+      where: {
+        project: { workspace: { organization: { slug: "utxo" } } },
+        projectId: NEWSLETTER_PROJECT_ID,
+        workspaceId: NEWSLETTER_WORKSPACE_ID,
+      },
+      select: { id: true },
+    });
+    expect(m.project).not.toHaveBeenCalled();
+    expect(m.posts).not.toHaveBeenCalled();
+    expect(m.assets).not.toHaveBeenCalled();
+    expect(m.copy).not.toHaveBeenCalled();
+    expect(m.generate).not.toHaveBeenCalled();
+    expect(m.create).not.toHaveBeenCalled();
+    expect(m.eval).not.toHaveBeenCalled();
   });
 
   it("limits generation with a shared project counter before model calls", async () => {

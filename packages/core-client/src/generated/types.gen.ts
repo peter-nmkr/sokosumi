@@ -6540,6 +6540,7 @@ export type NewsletterAnalytics = {
         uniqueOpens: number;
         uniqueClicks: number;
     }>;
+    issuesPagination: PaginationMetadata;
     issues: Array<{
         id: string;
         subject: string;
@@ -6547,7 +6548,7 @@ export type NewsletterAnalytics = {
         sent: number;
         uniqueOpens: number;
         uniqueClicks: number;
-        unsubscribes: number;
+        unsubscribes: number | null;
         openRate: number;
         clickRate: number;
     }>;
@@ -6558,7 +6559,10 @@ export type NewsletterAnalyticsTotals = {
     delivered: number;
     uniqueOpens: number;
     uniqueClicks: number;
-    unsubscribes: number;
+    /**
+     * Distinct newsletter unsubscribers, including manual changes. Null for an individual issue because unsubscribe links do not identify an issue.
+     */
+    unsubscribes: number | null;
     bounces: number;
     complaints: number;
     /**
@@ -47434,6 +47438,11 @@ export type GetProjectsByIdNewsletterAnalyticsData = {
         id: string;
     };
     query?: {
+        cursor?: string;
+        /**
+         * Number of items to return (max 100)
+         */
+        limit?: number;
         /**
          * First UTC date, inclusive. Defaults to 29 days before to.
          */

@@ -108,6 +108,7 @@ export async function addNewsletterSubscriber(
   input: AddNewsletterSubscriberRequest,
 ) {
   const newsletter = await getNewsletter(scope);
+  const now = new Date();
   try {
     return await prisma.newsletterSubscriber.create({
       data: {
@@ -116,7 +117,14 @@ export async function addNewsletterSubscriber(
         name: input.name,
         status: "ACTIVE",
         source: "MANUAL",
-        consentAt: new Date(),
+        consentAt: now,
+        events: {
+          create: {
+            newsletterId: newsletter.id,
+            type: "CONFIRMED",
+            occurredAt: now,
+          },
+        },
       },
     });
   } catch (error) {
@@ -145,14 +153,26 @@ export async function patchNewsletterSubscriber(
       "Only active or unsubscribed subscribers can change status manually",
     );
   }
+  const changedStatus = input.status && input.status !== subscriber.status;
+  const now = new Date();
   return prisma.newsletterSubscriber.update({
     where,
     data: {
       name: input.name,
       status: input.status,
-      ...(input.status && input.status !== subscriber.status
+      ...(changedStatus
         ? {
-            unsubscribedAt: input.status === "UNSUBSCRIBED" ? new Date() : null,
+            unsubscribedAt: input.status === "UNSUBSCRIBED" ? now : null,
+            events: {
+              create: {
+                newsletterId: newsletter.id,
+                type:
+                  input.status === "UNSUBSCRIBED"
+                    ? "UNSUBSCRIBED"
+                    : "CONFIRMED",
+                occurredAt: now,
+              },
+            },
           }
         : {}),
     },
@@ -180,17 +200,29 @@ export async function importNewsletterSubscribers(
   let imported = 0;
   // Keep each insert below PostgreSQL's parameter limit for a 50k-row import.
   for (let offset = 0; offset < subscribers.length; offset += 1000) {
-    const result = await prisma.newsletterSubscriber.createMany({
-      data: subscribers.slice(offset, offset + 1000).map((subscriber) => ({
-        ...subscriber,
-        newsletterId: newsletter.id,
-        status: "ACTIVE",
-        source: "CSV_IMPORT",
-        consentAt,
-      })),
-      skipDuplicates: true,
+    imported += await prisma.$transaction(async (tx) => {
+      const created = await tx.newsletterSubscriber.createManyAndReturn({
+        data: subscribers.slice(offset, offset + 1000).map((subscriber) => ({
+          ...subscriber,
+          newsletterId: newsletter.id,
+          status: "ACTIVE",
+          source: "CSV_IMPORT",
+          consentAt,
+        })),
+        skipDuplicates: true,
+        select: { id: true },
+      });
+      if (created.length)
+        await tx.newsletterEvent.createMany({
+          data: created.map(({ id }) => ({
+            newsletterId: newsletter.id,
+            subscriberId: id,
+            type: "CONFIRMED",
+            occurredAt: consentAt,
+          })),
+        });
+      return created.length;
     });
-    imported += result.count;
   }
   return { imported, skippedExisting: validRows - imported, invalid };
 }

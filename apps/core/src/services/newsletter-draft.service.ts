@@ -60,6 +60,9 @@ export async function generateNewsletterDraft(
   assertNewsletterEnabled();
   const input = draftNewsletterIssueRequestSchema.parse(raw);
   const { projectId, workspaceId } = scope;
+  if (!(await isNewsletterDraftAvailable(scope))) {
+    throw notFound("Newsletter is not enabled");
+  }
   await getNewsletter({ projectId, workspaceId });
   if (
     !(await allowNewsletterRequest(
