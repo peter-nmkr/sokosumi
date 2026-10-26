@@ -22354,6 +22354,9 @@ export const NewsletterAnalyticsSchema = {
                 ]
             }
         },
+        issuesPagination: {
+            $ref: '#/components/schemas/PaginationMetadata'
+        },
         issues: {
             type: 'array',
             items: {
@@ -22387,7 +22390,10 @@ export const NewsletterAnalyticsSchema = {
                         minimum: 0
                     },
                     unsubscribes: {
-                        type: 'integer',
+                        type: [
+                            'integer',
+                            'null'
+                        ],
                         minimum: 0
                     },
                     openRate: {
@@ -22419,6 +22425,7 @@ export const NewsletterAnalyticsSchema = {
         'totals',
         'subscriberGrowth',
         'engagement',
+        'issuesPagination',
         'issues'
     ]
 } as const;
@@ -22443,8 +22450,12 @@ export const NewsletterAnalyticsTotalsSchema = {
             minimum: 0
         },
         unsubscribes: {
-            type: 'integer',
-            minimum: 0
+            type: [
+                'integer',
+                'null'
+            ],
+            minimum: 0,
+            description: 'Distinct newsletter unsubscribers, including manual changes. Null for an individual issue because unsubscribe links do not identify an issue.'
         },
         bounces: {
             type: 'integer',
