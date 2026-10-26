@@ -948,7 +948,7 @@ describe("newsletter subscriber CSV import", () => {
         (row: { contactId: string }) => row.contactId,
       ),
     ).toEqual(rows.map((row: { contactId: string }) => row.contactId));
-    expect(m.executeRaw).toHaveBeenCalledOnce();
+    expect(m.executeRaw).toHaveBeenCalledTimes(2);
   });
 
   it("counts new, duplicate, existing and invalid rows without resurrecting subscribers", async () => {
@@ -1064,7 +1064,7 @@ describe("newsletter subscriber CSV import", () => {
     });
     expect(m.contactCreateMany).toHaveBeenCalledTimes(50);
     expect(m.memberCreateMany).toHaveBeenCalledTimes(50);
-    expect(m.executeRaw).toHaveBeenCalledTimes(50);
+    expect(m.executeRaw).toHaveBeenCalledTimes(100);
     expect(m.createManyAndReturn).toHaveBeenCalledTimes(50);
     expect(m.createEvents).toHaveBeenCalledTimes(50);
     expect(

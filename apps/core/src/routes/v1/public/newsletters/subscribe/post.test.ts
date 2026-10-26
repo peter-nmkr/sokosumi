@@ -112,6 +112,7 @@ beforeEach(() => {
   m.send.mockResolvedValue({ data: { id: "confirmation" }, error: null });
   m.redis.mockResolvedValue(1);
   const tx = {
+    $executeRaw: vi.fn(),
     newsletter: { findUniqueOrThrow: m.newsletter, update: m.newsletterUpdate },
     contact: {
       findMany: vi.fn(async () => []),
@@ -252,7 +253,7 @@ describe("public newsletter signup", () => {
     expect(m.send).toHaveBeenCalledWith(expect.objectContaining({ subject }));
   });
 
-  it.each(["ACTIVE", "BOUNCED"])(
+  it.each(["ACTIVE", "UNSUBSCRIBED", "BOUNCED"])(
     "does nothing for %s with the same acknowledgment",
     async (status) => {
       m.createMany.mockResolvedValue({ count: 0 });
@@ -289,7 +290,7 @@ describe("public newsletter signup", () => {
     expect(m.eventCreate).toHaveBeenCalledOnce();
   });
 
-  it("treats unsubscribed addresses as a fresh opt-in without discarding prior confirmation history", async () => {
+  it("preserves unsubscribe and confirmation history without sending another opt-in", async () => {
     m.createMany.mockResolvedValue({ count: 0 });
     m.subscriber.mockResolvedValue({
       ...NEWSLETTER_SUBSCRIBER,
@@ -298,22 +299,9 @@ describe("public newsletter signup", () => {
       confirmedAt: NEWSLETTER_NOW,
     });
     await signup();
-    expect(m.updateMany).toHaveBeenCalledWith({
-      where: {
-        id: NEWSLETTER_SUBSCRIBER.id,
-        status: "UNSUBSCRIBED",
-        consentAt: NEWSLETTER_NOW,
-      },
-      data: {
-        status: "PENDING",
-        consentAt: NEWSLETTER_NOW,
-        source: "SIGNUP_FORM",
-        name: undefined,
-        unsubscribedAt: null,
-      },
-    });
-    expect(m.send).toHaveBeenCalledOnce();
-    expect(m.eventCreate).toHaveBeenCalledOnce();
+    expect(m.updateMany).not.toHaveBeenCalled();
+    expect(m.send).not.toHaveBeenCalled();
+    expect(m.eventCreate).not.toHaveBeenCalled();
   });
 
   it("does not dispatch if a concurrent request already claimed the pending subscriber", async () => {

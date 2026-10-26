@@ -92,7 +92,11 @@ export async function subscribeToNewsletter(
       });
     }
     if (!created) {
-      if (subscriber.status === "ACTIVE" || subscriber.status === "BOUNCED")
+      if (
+        subscriber.status === "ACTIVE" ||
+        subscriber.status === "UNSUBSCRIBED" ||
+        subscriber.status === "BOUNCED"
+      )
         return null;
       if (
         subscriber.status === "PENDING" &&
