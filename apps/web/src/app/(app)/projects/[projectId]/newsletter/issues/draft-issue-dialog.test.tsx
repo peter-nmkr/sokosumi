@@ -35,6 +35,8 @@ const IMAGE: ProjectImageAsset = {
   height: 256,
   bytes: 1000,
   contentType: "image/png",
+  mediaType: "IMAGE",
+  video: null,
   createdAt: new Date(),
   jobId: NEWSLETTER_ISSUE.id,
   settings: {},
