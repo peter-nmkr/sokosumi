@@ -1,4 +1,5 @@
 import { captureException } from "@sentry/node";
+import type { Newsletter, NewsletterSubscriber } from "@sokosumi/database";
 import {
   renderNewsletterConfirmationEmail,
   renderNewsletterEmail,
@@ -129,6 +130,19 @@ export async function subscribeToNewsletter(
   });
   if (!subscriber) return;
 
+  await sendNewsletterConfirmation(
+    newsletter,
+    { ...subscriber, consentAt: now },
+    input.locale,
+  );
+}
+
+/** Shared opt-in email for public signup and authenticated subscriber additions. */
+export async function sendNewsletterConfirmation(
+  newsletter: Newsletter,
+  subscriber: Pick<NewsletterSubscriber, "id" | "email"> & { consentAt: Date },
+  locale = "en",
+) {
   try {
     const confirmUrl = newsletterPublicUrl("confirm");
     confirmUrl.searchParams.set(
@@ -137,7 +151,7 @@ export async function subscribeToNewsletter(
         {
           newsletterId: newsletter.id,
           subscriberId: subscriber.id,
-          consentAt: now.getTime(),
+          consentAt: subscriber.consentAt.getTime(),
         },
         getEnv().BETTER_AUTH_SECRET,
       ),
@@ -153,7 +167,7 @@ export async function subscribeToNewsletter(
       },
       confirmUrl: confirmUrl.href,
       unsubscribeUrl,
-      locale: input.locale,
+      locale,
     });
     await sendEmail({
       to: subscriber.email,

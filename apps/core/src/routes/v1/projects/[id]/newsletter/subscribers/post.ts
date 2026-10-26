@@ -23,7 +23,7 @@ const route = withCoworkerContextHeaderParameters(
     path: "/{id}/newsletter/subscribers",
     tags: ["Projects"],
     description:
-      "Add an active subscriber by hand. consent: true confirms that this person has consented. Existing emails return 409, including unsubscribed and bounced subscribers.",
+      "Add a subscriber by hand. CONFIRMED records existing consent; ASK sends a double opt-in email. Existing emails return 409. Unsubscribed and bounced subscribers are never reactivated.",
     request: {
       params: newsletterProjectParamsSchema,
       body: {
@@ -40,6 +40,7 @@ const route = withCoworkerContextHeaderParameters(
       404: jsonErrorResponse("Not Found"),
       409: jsonErrorResponse("Conflict"),
       422: jsonErrorResponse("Unprocessable Entity"),
+      429: jsonErrorResponse("Confirmation request limit exceeded"),
     },
   }),
 );
@@ -53,6 +54,7 @@ export default function mount(app: Pick<OpenAPIHonoWithAuth, "openapi">): void {
       scope,
       c.req.valid("json"),
       await resolveContactActor(c.var.authContext, scope.workspaceId),
+      c.req.raw,
     );
     return created(c, newsletterSubscriberSchema.parse(subscriber));
   });
