@@ -50,33 +50,25 @@ export function SubscriberActions({
     duration: Infinity,
     cancel: { label: t("dismiss"), onClick: () => undefined },
   };
-  const nextStatus =
-    subscriber.status === NewsletterSubscriberStatus.ACTIVE
-      ? NewsletterSubscriberStatus.UNSUBSCRIBED
-      : subscriber.status === NewsletterSubscriberStatus.UNSUBSCRIBED
-        ? NewsletterSubscriberStatus.ACTIVE
-        : null;
+  const canUnsubscribe =
+    subscriber.status === NewsletterSubscriberStatus.ACTIVE;
+  const canRemove =
+    canUnsubscribe || subscriber.status === NewsletterSubscriberStatus.PENDING;
 
   async function handleStatus() {
-    if (!nextStatus) return;
+    if (!canUnsubscribe) return;
     setPending(true);
     try {
       const result = await changeNewsletterSubscriberStatus({
         projectId,
         subscriberId: subscriber.id,
-        status: nextStatus,
+        status: NewsletterSubscriberStatus.UNSUBSCRIBED,
       });
       if (!result.ok) {
         toast.error(result.error.message, errorToastOptions);
         return;
       }
-      toast.success(
-        t(
-          nextStatus === NewsletterSubscriberStatus.ACTIVE
-            ? "resubscribed"
-            : "unsubscribed",
-        ),
-      );
+      toast.success(t("unsubscribed"));
       router.refresh();
     } catch {
       toast.error(t("updateError"), errorToastOptions);
@@ -107,6 +99,8 @@ export function SubscriberActions({
     }
   }
 
+  if (!canRemove) return null;
+
   return (
     <>
       <DropdownMenu>
@@ -123,13 +117,9 @@ export function SubscriberActions({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          {nextStatus ? (
+          {canUnsubscribe ? (
             <DropdownMenuItem onSelect={() => void handleStatus()}>
-              {t(
-                nextStatus === NewsletterSubscriberStatus.ACTIVE
-                  ? "resubscribe"
-                  : "unsubscribe",
-              )}
+              {t("unsubscribe")}
             </DropdownMenuItem>
           ) : null}
           <DropdownMenuItem

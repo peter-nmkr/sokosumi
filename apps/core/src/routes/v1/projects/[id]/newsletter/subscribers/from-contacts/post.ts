@@ -12,7 +12,6 @@ import {
   newsletterAddFromContactsResultSchema,
   newsletterProjectParamsSchema,
 } from "@/schemas/newsletter.schema";
-import { resolveContactActor } from "@/services/contacts.service";
 import { addNewsletterSubscribersFromContacts } from "@/services/newsletter.service";
 
 import { newsletterScope } from "../../context";
@@ -60,7 +59,7 @@ export default function mount(app: Pick<OpenAPIHonoWithAuth, "openapi">): void {
     const result = await addNewsletterSubscribersFromContacts(
       scope,
       c.req.valid("json"),
-      await resolveContactActor(c.var.authContext, scope.workspaceId),
+      c.var.authContext,
       c.req.raw,
     );
     return ok(c, newsletterAddFromContactsResultSchema.parse(result));

@@ -8,14 +8,19 @@ import { PrismaRaw } from "@sokosumi/database/client";
 import slugify from "slugify";
 
 import { conflict, notFound, tooManyRequests } from "@/helpers/error";
+import { requireNewsletterBetaAccess } from "@/helpers/newsletter-beta-access";
 import {
   createPaginationMeta,
   parseCursorPagination,
 } from "@/helpers/pagination";
-import { isPrismaUniqueViolation } from "@/helpers/prisma";
+import {
+  isPrismaRecordNotFoundError,
+  isPrismaUniqueViolation,
+} from "@/helpers/prisma";
 import prisma from "@/lib/db/prisma";
 import { parseNewsletterCsv } from "@/lib/newsletter/csv";
 import { allowNewsletterSignup } from "@/lib/newsletter/signup-limit";
+import type { AuthenticationContext } from "@/middleware/auth";
 import type {
   AddNewsletterSubscriberRequest,
   AddNewsletterSubscribersFromContactsRequest,
@@ -29,6 +34,7 @@ import {
   type ContactActor,
   contactListWhere,
   inContactTransaction,
+  resolveContactActor,
   resolveContactSummaries,
 } from "@/services/contacts.service";
 import { linkNewsletterContacts } from "@/services/newsletter-contacts.service";
@@ -42,8 +48,12 @@ export interface NewsletterScope {
 
 export async function getNewsletter(
   scope: NewsletterScope,
-  client: Pick<Prisma.TransactionClient, "project" | "newsletter"> = prisma,
+  client: Pick<
+    Prisma.TransactionClient,
+    "project" | "newsletter" | "workspace"
+  > = prisma,
 ) {
+  await requireNewsletterBetaAccess(scope.workspaceId, client);
   await requireScopedProject(scope, { client });
   const newsletter = await client.newsletter.findUnique({ where: scope });
   if (!newsletter) throw notFound("Newsletter not found");
@@ -54,6 +64,7 @@ export async function putNewsletter(
   scope: NewsletterScope,
   input: PutNewsletterRequest,
 ) {
+  await requireNewsletterBetaAccess(scope.workspaceId);
   await requireScopedProject(scope);
   const data = {
     ...input,
@@ -148,10 +159,11 @@ export async function listNewsletterSubscribers(
 export async function addNewsletterSubscriber(
   scope: NewsletterScope,
   input: AddNewsletterSubscriberRequest,
-  actor: ContactActor,
+  auth: AuthenticationContext,
   request: Request,
 ) {
   const newsletter = await getNewsletter(scope);
+  const actor = await resolveContactActor(auth, scope.workspaceId);
   await requireConfirmationBudget(newsletter.id, input.consent, request);
   const result = await createSubscriberChunk(
     newsletter,
@@ -164,7 +176,7 @@ export async function addNewsletterSubscriber(
   if (!subscriber) {
     if (result.skippedUnsubscribed)
       throw conflict(
-        "This person unsubscribed; they can sign up again from the signup form",
+        "This person unsubscribed; they cannot be subscribed again",
       );
     if (result.skippedBounced)
       throw conflict(
@@ -187,32 +199,42 @@ export async function patchNewsletterSubscriber(
   const where = { id: subscriberId, newsletterId: newsletter.id };
   const subscriber = await prisma.newsletterSubscriber.findUnique({ where });
   if (!subscriber) throw notFound("Subscriber not found");
-  if (subscriber.status === "UNSUBSCRIBED" && input.status === "ACTIVE") {
-    throw conflict(
-      "This person unsubscribed; they can sign up again from the signup form",
-    );
+  const changedStatus = input.status && input.status !== subscriber.status;
+  if (changedStatus && subscriber.status !== "ACTIVE") {
+    throw conflict("Only active subscribers can change status manually");
   }
-  if (
-    input.status &&
-    subscriber.status !== "ACTIVE" &&
-    subscriber.status !== "UNSUBSCRIBED"
-  ) {
-    throw conflict(
-      "Only active or unsubscribed subscribers can change status manually",
-    );
-  }
-  const updated = await prisma.newsletterSubscriber.update({
-    where,
-    data: {
-      name: input.name,
-      status: input.status,
-      ...(input.status && input.status !== subscriber.status
-        ? {
-            unsubscribedAt: input.status === "UNSUBSCRIBED" ? new Date() : null,
-          }
-        : {}),
-    },
-  });
+  const now = new Date();
+  const updated = await prisma.newsletterSubscriber
+    .update({
+      where: {
+        ...where,
+        ...(changedStatus ? { status: subscriber.status } : {}),
+      },
+      data: {
+        name: input.name,
+        ...(changedStatus
+          ? {
+              status: input.status,
+              unsubscribedAt: now,
+              events: {
+                create: {
+                  newsletterId: newsletter.id,
+                  type: "UNSUBSCRIBED",
+                  occurredAt: now,
+                },
+              },
+            }
+          : {}),
+      },
+    })
+    .catch((error: unknown) => {
+      if (isPrismaRecordNotFoundError(error)) {
+        if (changedStatus)
+          throw conflict("Subscriber status changed. Please retry.");
+        throw notFound("Subscriber not found");
+      }
+      throw error;
+    });
   const contacts = await resolveContactSummaries(
     prisma,
     scope.workspaceId,
@@ -232,18 +254,30 @@ export async function deleteNewsletterSubscriber(
 ) {
   const newsletter = await getNewsletter(scope);
   const { count } = await prisma.newsletterSubscriber.deleteMany({
-    where: { id: subscriberId, newsletterId: newsletter.id },
+    where: {
+      id: subscriberId,
+      newsletterId: newsletter.id,
+      status: { in: ["ACTIVE", "PENDING"] },
+    },
   });
-  if (!count) throw notFound("Subscriber not found");
+  if (!count) {
+    const subscriber = await prisma.newsletterSubscriber.findUnique({
+      where: { id: subscriberId, newsletterId: newsletter.id },
+      select: { id: true },
+    });
+    if (!subscriber) throw notFound("Subscriber not found");
+    throw conflict("Only active or pending subscribers can be deleted");
+  }
 }
 
 export async function importNewsletterSubscribers(
   scope: NewsletterScope,
   input: ImportNewsletterSubscribersRequest,
-  actor: ContactActor,
+  auth: AuthenticationContext,
   request: Request,
 ) {
   const newsletter = await getNewsletter(scope);
+  const actor = await resolveContactActor(auth, scope.workspaceId);
   const { subscribers, validRows, invalid } = parseNewsletterCsv(input.csv);
   await requireConfirmationBudget(newsletter.id, input.consent, request);
   const result = await createSubscriberChunks(
@@ -266,10 +300,11 @@ export async function importNewsletterSubscribers(
 export async function addNewsletterSubscribersFromContacts(
   scope: NewsletterScope,
   input: AddNewsletterSubscribersFromContactsRequest,
-  actor: ContactActor,
+  auth: AuthenticationContext,
   request: Request,
 ) {
   const newsletter = await getNewsletter(scope);
+  const actor = await resolveContactActor(auth, scope.workspaceId);
   const resolved = await resolveContactSummaries(prisma, scope.workspaceId, [
     ...new Set(input.contactIds ?? []),
   ]);
@@ -426,12 +461,12 @@ async function createSubscriberChunk(
           AND subscriber."contactId" IS NULL
           AND subscriber.status IN ('ACTIVE', 'PENDING')
       `);
-    if (consent === "ASK" && created.length)
+    if (created.length)
       await tx.newsletterEvent.createMany({
         data: created.map((subscriber) => ({
           newsletterId: newsletter.id,
           subscriberId: subscriber.id,
-          type: "SUBSCRIBED",
+          type: consent === "ASK" ? "SUBSCRIBED" : "CONFIRMED",
           occurredAt: consentAt,
         })),
       });

@@ -1,5 +1,6 @@
 import { SOKO_BOT_TOOL_INPUT_SCHEMAS } from "@sokosumi/soko-bot";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { notFound } from "@/helpers/error";
 import {
   ACTION_CAPABILITIES,
   actionInputHash,
@@ -141,7 +142,6 @@ function execute(runtime = service(), input: unknown = INPUT) {
 beforeEach(() => {
   vi.resetAllMocks();
   m.enabled = true;
-  m.betaWorkspace.mockResolvedValue(newsletterWorkspace());
   m.access.mockResolvedValue({
     projectId: NEWSLETTER_PROJECT_ID,
     workspaceId: NEWSLETTER_WORKSPACE_ID,
@@ -170,6 +170,10 @@ describe("Soko Bot newsletter_draft_issue", () => {
     "refuses drafting in workspace organization %s",
     async (slug) => {
       m.betaWorkspace.mockResolvedValue(newsletterWorkspace(slug));
+      const actual = await vi.importActual<
+        typeof import("@/services/newsletter.service")
+      >("@/services/newsletter.service");
+      m.newsletter.mockImplementation(actual.getNewsletter);
       await expect(execute()).rejects.toMatchObject({ status: 404 });
       expect(m.generate).not.toHaveBeenCalled();
       expect(m.create).not.toHaveBeenCalled();
@@ -285,6 +289,31 @@ describe("Soko Bot newsletter_draft_issue", () => {
     expect(m.access).not.toHaveBeenCalled();
     expect(m.generate).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "refuses a non-beta workspace before generation or completed-receipt replay (replay=%s)",
+    async (replay) => {
+      m.newsletter.mockRejectedValue(notFound("Newsletter not found"));
+      if (replay) {
+        m.receipt.mockResolvedValue({
+          capability: "newsletter_draft_issue",
+          inputHash: actionInputHash(INPUT),
+          status: "COMPLETED",
+          result: NEWSLETTER_ISSUE,
+          turnId: "turn",
+          toolCallId: "draft",
+        });
+      }
+      await expect(execute()).rejects.toThrow("Newsletter not found");
+      expect(m.newsletter).toHaveBeenCalledWith({
+        projectId: NEWSLETTER_PROJECT_ID,
+        workspaceId: NEWSLETTER_WORKSPACE_ID,
+      });
+      expect(m.generate).not.toHaveBeenCalled();
+      expect(m.create).not.toHaveBeenCalled();
+      expect(m.receipt).not.toHaveBeenCalled();
+    },
+  );
 
   it("replays a completed receipt without generating or creating a second issue", async () => {
     m.receipt.mockResolvedValue({

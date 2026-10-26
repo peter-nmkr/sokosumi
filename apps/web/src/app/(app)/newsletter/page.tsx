@@ -3,17 +3,24 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { connection } from "next/server";
 import { getTranslations } from "next-intl/server";
+import { createLoader, parseAsString, type SearchParams } from "nuqs/server";
 
 import { PROJECTS_PAGE_LIMIT } from "@/app/projects/constants";
 import { EmptyState } from "@/components/common/empty-state";
 import { Button } from "@/components/ui/button";
 import { newsletterService } from "@/lib/services/newsletter.service";
 import { projectService } from "@/lib/services/project.service";
+import { isUuidString } from "@/lib/utils/uuid";
 
 export const instant = false;
 
+const loadSearchParams = createLoader({
+  projectId: parseAsString,
+  cursor: parseAsString,
+});
+
 interface NewsletterPageProps {
-  searchParams: Promise<{ projectId?: string; cursor?: string }>;
+  searchParams: Promise<SearchParams>;
 }
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -27,9 +34,10 @@ export default async function NewsletterPage({
   await connection();
   if (!(await newsletterService.isEnabled())) notFound();
 
-  const query = await searchParams;
+  const query = await loadSearchParams(searchParams);
   const projectId = query.projectId?.trim();
   if (projectId) {
+    if (!isUuidString(projectId)) notFound();
     const project = await projectService.getProjectById(projectId);
     if (!project) notFound();
     redirect(`/projects/${encodeURIComponent(project.id)}/newsletter`);
@@ -38,7 +46,7 @@ export default async function NewsletterPage({
   const [{ projects, pagination }, t] = await Promise.all([
     projectService.listProjects({
       limit: PROJECTS_PAGE_LIMIT,
-      cursor: query.cursor,
+      cursor: query.cursor ?? undefined,
     }),
     getTranslations("App.Newsletter"),
   ]);

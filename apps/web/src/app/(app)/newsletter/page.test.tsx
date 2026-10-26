@@ -34,11 +34,13 @@ vi.mock("@/lib/services/project.service", () => ({
 
 import NewsletterPage, { generateMetadata } from "./page";
 
+const PROJECT_ID = "11111111-1111-4111-8111-111111111111";
+
 describe("NewsletterPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     isEnabledMock.mockResolvedValue(true);
-    projectServiceMock.getProjectById.mockResolvedValue({ id: "project-1" });
+    projectServiceMock.getProjectById.mockResolvedValue({ id: PROJECT_ID });
     projectServiceMock.listProjects.mockResolvedValue({
       projects: [],
       pagination: null,
@@ -62,11 +64,33 @@ describe("NewsletterPage", () => {
   it("redirects a valid project scope to its newsletter", async () => {
     await expect(
       NewsletterPage({
-        searchParams: Promise.resolve({ projectId: " project-1 " }),
+        searchParams: Promise.resolve({ projectId: ` ${PROJECT_ID} ` }),
       }),
-    ).rejects.toThrow("REDIRECT:/projects/project-1/newsletter");
-    expect(projectServiceMock.getProjectById).toHaveBeenCalledWith("project-1");
+    ).rejects.toThrow(`REDIRECT:/projects/${PROJECT_ID}/newsletter`);
+    expect(projectServiceMock.getProjectById).toHaveBeenCalledWith(PROJECT_ID);
     expect(projectServiceMock.listProjects).not.toHaveBeenCalled();
+  });
+
+  it("uses the first project scope when the query parameter is repeated", async () => {
+    await expect(
+      NewsletterPage({
+        searchParams: Promise.resolve({ projectId: [PROJECT_ID, "ignored"] }),
+      }),
+    ).rejects.toThrow(`REDIRECT:/projects/${PROJECT_ID}/newsletter`);
+    expect(projectServiceMock.getProjectById).toHaveBeenCalledExactlyOnceWith(
+      PROJECT_ID,
+    );
+  });
+
+  it("returns notFound for a malformed project ID before calling Core", async () => {
+    await expect(
+      NewsletterPage({
+        searchParams: Promise.resolve({ projectId: "missing" }),
+      }),
+    ).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(projectServiceMock.getProjectById).not.toHaveBeenCalled();
+    expect(projectServiceMock.listProjects).not.toHaveBeenCalled();
+    expect(redirectMock).not.toHaveBeenCalled();
   });
 
   it("does not redirect to a project the workspace cannot access", async () => {
@@ -74,9 +98,10 @@ describe("NewsletterPage", () => {
 
     await expect(
       NewsletterPage({
-        searchParams: Promise.resolve({ projectId: "missing" }),
+        searchParams: Promise.resolve({ projectId: PROJECT_ID }),
       }),
     ).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(projectServiceMock.getProjectById).toHaveBeenCalledWith(PROJECT_ID);
     expect(redirectMock).not.toHaveBeenCalled();
   });
 
@@ -148,6 +173,19 @@ describe("NewsletterPage", () => {
     expect(
       screen.getByRole("link", { name: messages.App.Newsletter.nextPage }),
     ).toHaveAttribute("href", "/newsletter?cursor=next%2Fpage");
+  });
+
+  it("uses the first cursor when the query parameter is repeated", async () => {
+    render(
+      await NewsletterPage({
+        searchParams: Promise.resolve({ cursor: ["current-page", "ignored"] }),
+      }),
+    );
+
+    expect(projectServiceMock.listProjects).toHaveBeenCalledWith({
+      limit: 20,
+      cursor: "current-page",
+    });
   });
 
   it("uses the translated page title for metadata", async () => {
