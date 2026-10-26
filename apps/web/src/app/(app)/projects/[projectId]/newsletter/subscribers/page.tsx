@@ -80,6 +80,8 @@ export default async function SubscribersPage({
         />
         <Subscribers
           projectId={project.id}
+          newsletterName={newsletter.name}
+          contactListId={newsletter.contactListId}
           data={response.data}
           pagination={response.meta.pagination}
         />

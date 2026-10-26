@@ -11,6 +11,7 @@ export type TaskScheduleStateAction = "pause" | "resume" | "end";
 import type {
   ActivateEnterpriseContractRequest,
   AddNewsletterSubscriberRequest,
+  AddNewsletterSubscribersFromContactsRequest,
   AgentStatus,
   AggregateAdminTaskX402PaymentsByAgentData,
   CreateAdminBadgeCampaignData,
@@ -455,6 +456,7 @@ import {
   postProjectsByIdNewsletterIssuesDraftWithAi as corePostProjectsByIdNewsletterIssuesDraftWithAi,
   postProjectsByIdNewsletterIssuesPreview as corePostProjectsByIdNewsletterIssuesPreview,
   postProjectsByIdNewsletterSubscribers as corePostProjectsByIdNewsletterSubscribers,
+  postProjectsByIdNewsletterSubscribersFromContacts as corePostProjectsByIdNewsletterSubscribersFromContacts,
   postProjectsByIdNewsletterSubscribersImport as corePostProjectsByIdNewsletterSubscribersImport,
   postProjectsByIdSocialAccountPostsByAccountPostIdRecycle as corePostProjectsByIdSocialAccountPostsByAccountPostIdRecycle,
   postProjectsByIdSocialConnectionsByConnectionIdStatisticsRefresh as corePostProjectsByIdSocialConnectionsByConnectionIdStatisticsRefresh,
@@ -1013,6 +1015,22 @@ export function createCoreClient(getClient: GetCoreClient) {
           body,
         }),
       "Failed to import newsletter subscribers",
+    );
+  }
+
+  async function postProjectsByIdNewsletterSubscribersFromContacts(
+    id: string,
+    body: AddNewsletterSubscribersFromContactsRequest,
+  ) {
+    return executeCoreOperation(
+      getClient,
+      (client) =>
+        corePostProjectsByIdNewsletterSubscribersFromContacts({
+          client,
+          path: { id },
+          body,
+        }),
+      "Failed to add newsletter subscribers from Contacts",
     );
   }
 
@@ -6652,6 +6670,7 @@ export function createCoreClient(getClient: GetCoreClient) {
     putProjectsByIdNewsletter,
     getProjectsByIdNewsletterSubscribers,
     postProjectsByIdNewsletterSubscribers,
+    postProjectsByIdNewsletterSubscribersFromContacts,
     postProjectsByIdNewsletterSubscribersImport,
     patchProjectsByIdNewsletterSubscribersBySubscriberId,
     deleteProjectsByIdNewsletterSubscribersBySubscriberId,
