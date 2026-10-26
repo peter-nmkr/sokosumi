@@ -33,6 +33,7 @@ const m = vi.hoisted(() => {
   return {
     state,
     issueFindUnique: vi.fn(),
+    workspace: vi.fn(),
     issueFindMany: vi.fn(),
     issueUpdate: vi.fn(),
     subscriberFindMany: vi.fn(),
@@ -63,6 +64,7 @@ vi.mock("@/config/env", async (importOriginal) => {
 });
 vi.mock("@/lib/db/prisma", () => ({
   default: {
+    workspace: { findUnique: m.workspace },
     newsletterIssue: {
       findUnique: m.issueFindUnique,
       findMany: m.issueFindMany,
@@ -89,6 +91,7 @@ function subscribers(count: number): NewsletterSubscriber[] {
 beforeEach(() => {
   vi.resetAllMocks();
   m.state.enabled = true;
+  m.workspace.mockResolvedValue({ organization: { slug: "utxo" } });
   m.state.domain = "news.example.com";
   m.state.subscribers = subscribers(1);
   m.state.sends = [];
@@ -98,6 +101,7 @@ beforeEach(() => {
     ...NEWSLETTER_ISSUE,
     status: "SCHEDULED",
     newsletter: NEWSLETTER,
+    project: { workspaceId: NEWSLETTER.workspaceId },
   });
   m.issueFindMany.mockResolvedValue([{ id: NEWSLETTER_ISSUE_ID }]);
   m.issueUpdate.mockResolvedValue({ count: 1 });
@@ -179,6 +183,24 @@ beforeEach(() => {
 });
 
 describe("sendNewsletterIssue", () => {
+  it("does not send after the project moves from the stored newsletter workspace to a non-beta workspace", async () => {
+    m.issueFindUnique.mockResolvedValue({
+      ...NEWSLETTER_ISSUE,
+      status: "SCHEDULED",
+      newsletter: NEWSLETTER,
+      project: { workspaceId: "moved_workspace" },
+    });
+    m.workspace.mockResolvedValue({ organization: { slug: "other" } });
+    await expect(
+      sendNewsletterIssue(NEWSLETTER_ISSUE_ID),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(m.workspace).toHaveBeenCalledWith({
+      where: { id: "moved_workspace" },
+      select: { organization: { select: { slug: true } } },
+    });
+    expect(m.issueUpdate).not.toHaveBeenCalled();
+    expect(m.batchSend).not.toHaveBeenCalled();
+  });
   it("sends 250 active subscribers in three private batches with signed links and headers", async () => {
     m.state.subscribers = subscribers(250);
     await sendNewsletterIssue(NEWSLETTER_ISSUE_ID);
@@ -369,6 +391,7 @@ describe("sendNewsletterIssue", () => {
     m.issueFindUnique.mockResolvedValue({
       ...NEWSLETTER_ISSUE,
       newsletter: NEWSLETTER,
+      project: { workspaceId: NEWSLETTER.workspaceId },
     });
     await expect(
       sendNewsletterIssue(NEWSLETTER_ISSUE_ID),
@@ -396,6 +419,7 @@ describe("sendNewsletterIssue", () => {
     m.issueFindUnique.mockResolvedValue({
       ...NEWSLETTER_ISSUE,
       newsletter: NEWSLETTER,
+      project: { workspaceId: NEWSLETTER.workspaceId },
       status: "SENDING",
       leaseToken: "old-lease",
       leaseExpiresAt: new Date(Date.now() + 60_000),
@@ -406,6 +430,7 @@ describe("sendNewsletterIssue", () => {
     m.issueFindUnique.mockResolvedValue({
       ...NEWSLETTER_ISSUE,
       newsletter: NEWSLETTER,
+      project: { workspaceId: NEWSLETTER.workspaceId },
       status: "SENDING",
       leaseToken: "old-lease",
       leaseExpiresAt: new Date(0),
@@ -435,6 +460,7 @@ describe("newsletter scheduler", () => {
     expect(m.issueFindMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
+          project: { workspace: { organization: { slug: "utxo" } } },
           OR: [
             { status: "SCHEDULED", scheduledAt: { lte: expect.any(Date) } },
             { status: "SENDING", leaseExpiresAt: { lte: expect.any(Date) } },

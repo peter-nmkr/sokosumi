@@ -17,6 +17,7 @@ import router from "../index";
 const m = vi.hoisted(() => ({
   enabled: true,
   findUnique: vi.fn(),
+  workspace: vi.fn(),
   updateMany: vi.fn(),
   eventCreate: vi.fn(),
   transaction: vi.fn(),
@@ -37,6 +38,7 @@ vi.mock("@/config/env", async (importOriginal) => {
 });
 vi.mock("@/lib/db/prisma", () => ({
   default: {
+    workspace: { findUnique: m.workspace },
     newsletterSubscriber: {
       findUnique: m.findUnique,
       updateMany: m.updateMany,
@@ -76,6 +78,7 @@ function pending(overrides: Record<string, unknown> = {}) {
     ...overrides,
     newsletter: {
       ...NEWSLETTER,
+      project: { workspaceId: NEWSLETTER.workspaceId },
       brand: { primaryColor: "#123456", footerText: "Our footer" },
       welcomeEmailEnabled: true,
       welcomeSubject: "Welcome aboard",
@@ -89,6 +92,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NEWSLETTER_NOW);
   m.enabled = true;
+  m.workspace.mockResolvedValue({ organization: { slug: "utxo" } });
   m.findUnique.mockResolvedValue(pending());
   m.updateMany
     .mockResolvedValueOnce({ count: 1 })
@@ -105,6 +109,15 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("public newsletter confirmation", () => {
+  it.each(["GET", "POST"])(
+    "blocks %s confirmation when the project's current workspace leaves the beta",
+    async (method) => {
+      m.workspace.mockResolvedValue({ organization: { slug: "other" } });
+      expect((await app().request(url(), { method })).status).toBe(404);
+      expect(m.updateMany).not.toHaveBeenCalled();
+      expect(m.send).not.toHaveBeenCalled();
+    },
+  );
   it("GET renders a self-contained POST form without mutating or sending mail", async () => {
     const signed = token();
     const response = await app().request(url(signed));
@@ -179,7 +192,13 @@ describe("public newsletter confirmation", () => {
   });
 
   it("does not send a welcome when disabled", async () => {
-    m.findUnique.mockResolvedValue({ ...pending(), newsletter: NEWSLETTER });
+    m.findUnique.mockResolvedValue({
+      ...pending(),
+      newsletter: {
+        ...NEWSLETTER,
+        project: { workspaceId: NEWSLETTER.workspaceId },
+      },
+    });
     expect((await app().request(url(), { method: "POST" })).status).toBe(200);
     expect(m.eventCreate).toHaveBeenCalledOnce();
     expect(m.send).not.toHaveBeenCalled();

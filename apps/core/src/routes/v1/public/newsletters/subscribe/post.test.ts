@@ -17,6 +17,7 @@ const m = vi.hoisted(() => ({
   enabled: true,
   domain: "news.example.com" as string | undefined,
   newsletter: vi.fn(),
+  workspace: vi.fn(),
   createMany: vi.fn(),
   subscriber: vi.fn(),
   updateMany: vi.fn(),
@@ -46,6 +47,7 @@ vi.mock("@/config/env", async (importOriginal) => {
 vi.mock("@/lib/db/prisma", () => ({
   default: {
     newsletter: { findUnique: m.newsletter },
+    workspace: { findUnique: m.workspace },
     newsletterSubscriber: {
       createMany: m.createMany,
       findUnique: m.subscriber,
@@ -90,7 +92,11 @@ beforeEach(() => {
   vi.setSystemTime(NEWSLETTER_NOW);
   m.enabled = true;
   m.domain = "news.example.com";
-  m.newsletter.mockResolvedValue(NEWSLETTER);
+  m.newsletter.mockResolvedValue({
+    ...NEWSLETTER,
+    project: { workspaceId: NEWSLETTER.workspaceId },
+  });
+  m.workspace.mockResolvedValue({ organization: { slug: "utxo" } });
   m.createMany.mockResolvedValue({ count: 1 });
   m.subscriber.mockResolvedValue({
     ...NEWSLETTER_SUBSCRIBER,
@@ -115,6 +121,20 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("public newsletter signup", () => {
+  it.each([null, { slug: "other" }])(
+    "blocks new signups outside the beta before writing consent or sending mail: %s",
+    async (organization) => {
+      m.workspace.mockResolvedValue({ organization });
+      const response = await app().request(URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: "reader@example.com" }),
+      });
+      expect(response.status).toBe(404);
+      expect(m.createMany).not.toHaveBeenCalled();
+      expect(m.send).not.toHaveBeenCalled();
+    },
+  );
   it("creates pending consent, records SUBSCRIBED and sends a signed confirmation from the newsletter domain", async () => {
     await signup({
       email: " Reader@EXAMPLE.com ",

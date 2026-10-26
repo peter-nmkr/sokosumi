@@ -17,7 +17,7 @@ import {
   newsletterSenderOptions,
   newsletterUnsubscribeOptions,
 } from "@/lib/newsletter/email";
-import { assertNewsletterEnabled } from "@/lib/newsletter/feature";
+import { assertNewsletterWorkspaceEnabled } from "@/lib/newsletter/feature";
 import { allowNewsletterSignup } from "@/lib/newsletter/signup-limit";
 import {
   newsletterBrandSchema,
@@ -27,13 +27,19 @@ import {
 const CONFIRMATION_RESEND_MS = 10 * 60_000;
 
 export async function getPublicNewsletter(publicSlug: string) {
-  assertNewsletterEnabled();
   const newsletter = await prisma.newsletter.findUnique({
     where: { publicSlug },
-    select: { name: true, senderName: true, brand: true },
+    select: {
+      name: true,
+      senderName: true,
+      brand: true,
+      project: { select: { workspaceId: true } },
+    },
   });
   if (!newsletter) throw notFound("Newsletter not found");
-  return newsletter;
+  await assertNewsletterWorkspaceEnabled(newsletter.project.workspaceId);
+  const { project: _project, ...info } = newsletter;
+  return info;
 }
 
 export async function subscribeToNewsletter(
@@ -41,12 +47,13 @@ export async function subscribeToNewsletter(
   input: SubscribeNewsletterRequest,
   request: Request,
 ): Promise<void> {
-  assertNewsletterEnabled();
   if (input.website) return;
   const newsletter = await prisma.newsletter.findUnique({
     where: { publicSlug },
+    include: { project: { select: { workspaceId: true } } },
   });
   if (!newsletter) throw notFound("Newsletter not found");
+  await assertNewsletterWorkspaceEnabled(newsletter.project.workspaceId);
   if (!(await allowNewsletterSignup(newsletter.id, request))) return;
 
   const now = new Date();
@@ -146,14 +153,18 @@ export async function subscribeToNewsletter(
 }
 
 export async function getNewsletterConfirmSubscriber(token: string) {
-  assertNewsletterEnabled();
   const { newsletterId, subscriberId, consentAt } =
     verifyNewsletterConfirmToken(token, getEnv().BETTER_AUTH_SECRET);
   const subscriber = await prisma.newsletterSubscriber.findUnique({
     where: { id: subscriberId, newsletterId },
-    include: { newsletter: true },
+    include: {
+      newsletter: { include: { project: { select: { workspaceId: true } } } },
+    },
   });
   if (!subscriber) throw notFound("Subscriber not found");
+  await assertNewsletterWorkspaceEnabled(
+    subscriber.newsletter.project.workspaceId,
+  );
   if (subscriber.consentAt?.getTime() !== consentAt) {
     throw badRequest("Invalid or expired confirmation token");
   }

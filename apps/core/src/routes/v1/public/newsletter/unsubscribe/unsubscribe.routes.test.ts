@@ -135,7 +135,18 @@ describe("public newsletter unsubscribe", () => {
   });
 
   it.each(["GET", "POST"])(
-    "hides %s even with a missing token while disabled",
+    "keeps %s available while newsletters are disabled",
+    async (method) => {
+      m.enabled = false;
+      expect((await app().request(URL, { method })).status).toBe(200);
+      expect(m.findUnique).toHaveBeenCalled();
+      if (method === "GET") expect(m.updateMany).not.toHaveBeenCalled();
+      else expect(m.updateMany).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["GET", "POST"])(
+    "validates missing tokens for %s even when disabled",
     async (method) => {
       m.enabled = false;
       expect(
@@ -145,9 +156,8 @@ describe("public newsletter unsubscribe", () => {
             { method },
           )
         ).status,
-      ).toBe(404);
+      ).toBe(422);
       expect(m.findUnique).not.toHaveBeenCalled();
-      expect(m.updateMany).not.toHaveBeenCalled();
     },
   );
 

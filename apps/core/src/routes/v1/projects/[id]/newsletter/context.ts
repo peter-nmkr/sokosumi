@@ -3,6 +3,7 @@ import type { Context } from "hono";
 import { requireAuthorizedUserContext } from "@/helpers/coworker-user-context-binding";
 import { forbidden } from "@/helpers/error";
 import type { EnvVariables } from "@/lib/hono";
+import { assertNewsletterWorkspaceEnabled } from "@/lib/newsletter/feature";
 import { isSharedSokoBotAuthContext } from "@/middleware/auth";
 import { requireWorkspaceContext } from "@/middleware/workspace";
 import type { NewsletterScope } from "@/services/newsletter.service";
@@ -12,6 +13,7 @@ export async function newsletterScope(
   c: Context<EnvVariables>,
   projectId: string,
 ): Promise<NewsletterScope> {
+  await assertNewsletterWorkspaceEnabled(c.var.workspaceContext?.workspaceId);
   await requireAuthorizedUserContext(c.var.authContext);
   const { workspaceId } = requireWorkspaceContext(c.var.workspaceContext);
   return { projectId, workspaceId };
@@ -24,6 +26,7 @@ export async function newsletterIssueScope(
 ): Promise<NewsletterScope> {
   const auth = c.var.authContext;
   if (isSharedSokoBotAuthContext(auth)) {
+    await assertNewsletterWorkspaceEnabled(auth.workspaceId);
     if (auth.scope === "project" && auth.projectId !== projectId) {
       throw forbidden("Newsletter is outside the Soko Bot's project");
     }

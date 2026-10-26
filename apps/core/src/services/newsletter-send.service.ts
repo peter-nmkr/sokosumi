@@ -17,7 +17,9 @@ import {
 } from "@/lib/newsletter/email";
 import {
   assertNewsletterEnabled,
+  assertNewsletterWorkspaceEnabled,
   isNewsletterEnabled,
+  NEWSLETTER_BETA_WORKSPACE_WHERE,
 } from "@/lib/newsletter/feature";
 import {
   newsletterBrandSchema,
@@ -46,9 +48,10 @@ export async function sendNewsletterIssue(
   newsletterPublicUrl("unsubscribe");
   const issue = await prisma.newsletterIssue.findUnique({
     where: { id: issueId },
-    include: { newsletter: true },
+    include: { newsletter: true, project: { select: { workspaceId: true } } },
   });
   if (!issue) throw notFound("Newsletter issue not found");
+  await assertNewsletterWorkspaceEnabled(issue.project.workspaceId);
   const sender = newsletterSenderOptions(issue.newsletter);
   const now = new Date();
   const recovering =
@@ -263,6 +266,7 @@ export async function sendDueNewsletterIssues(
   const now = new Date();
   const issues = await prisma.newsletterIssue.findMany({
     where: {
+      project: { workspace: NEWSLETTER_BETA_WORKSPACE_WHERE },
       OR: [
         { status: "SCHEDULED", scheduledAt: { lte: now } },
         { status: "SENDING", leaseExpiresAt: { lte: now } },
