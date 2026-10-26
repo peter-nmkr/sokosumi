@@ -6,7 +6,6 @@ import {
   type OpenAPIHonoWithAuth,
   withCoworkerContextHeaderParameters,
 } from "@/lib/hono";
-import { assertNewsletterEnabled } from "@/lib/newsletter/feature";
 import {
   newsletterSubscriberParamsSchema,
   newsletterSubscriberSchema,
@@ -22,7 +21,7 @@ const route = withCoworkerContextHeaderParameters(
     path: "/{id}/newsletter/subscribers/{subscriberId}",
     tags: ["Projects"],
     description:
-      "Change a subscriber's name or switch between ACTIVE and UNSUBSCRIBED. Pending and bounced subscribers cannot change status manually.",
+      "Change a subscriber's name or unsubscribe an active subscriber. Unsubscribed, pending and bounced subscribers cannot change status manually.",
     request: {
       params: newsletterSubscriberParamsSchema,
       body: {
@@ -50,7 +49,6 @@ const route = withCoworkerContextHeaderParameters(
 
 export default function mount(app: Pick<OpenAPIHonoWithAuth, "openapi">): void {
   app.openapi(route, async (c) => {
-    assertNewsletterEnabled();
     const { id, subscriberId } = c.req.valid("param");
     const scope = await newsletterScope(c, id);
     const subscriber = await patchNewsletterSubscriber(

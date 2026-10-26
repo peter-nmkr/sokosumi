@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { errorHandler } from "@/helpers/error-handler";
 import type { EnvVariables } from "@/lib/hono";
+import { NEWSLETTER_BETA_SCOPE } from "@/lib/newsletter/feature";
 import {
   NEWSLETTER,
   NEWSLETTER_ISSUE,
@@ -94,7 +95,7 @@ describe("public newsletter archive", () => {
       nextCursor: null,
     });
     expect(m.newsletter).toHaveBeenCalledWith({
-      where: { publicSlug: NEWSLETTER.publicSlug },
+      where: { publicSlug: NEWSLETTER.publicSlug, ...NEWSLETTER_BETA_SCOPE },
       select: { id: true },
     });
     expect(m.list).toHaveBeenCalledWith({
@@ -197,7 +198,10 @@ describe("public newsletter archive", () => {
     expect(m.issue).toHaveBeenCalledWith({
       where: {
         publicSlug: SENT_ISSUE.publicSlug,
-        newsletter: { publicSlug: NEWSLETTER.publicSlug },
+        newsletter: {
+          publicSlug: NEWSLETTER.publicSlug,
+          ...NEWSLETTER_BETA_SCOPE,
+        },
         status: "SENT",
         sentAt: { not: null },
       },
@@ -214,7 +218,7 @@ describe("public newsletter archive", () => {
   });
 
   it.each(["missing-newsletter", NEWSLETTER.publicSlug])(
-    "returns 404 for missing, unsent or other-newsletter issues under %s",
+    "returns 404 for missing, unsent, other-newsletter or non-beta issues under %s",
     async (slug) => {
       m.issue.mockResolvedValue(null);
       const response = await app().request(
@@ -226,7 +230,7 @@ describe("public newsletter archive", () => {
         expect.objectContaining({
           where: {
             publicSlug: SENT_ISSUE.publicSlug,
-            newsletter: { publicSlug: slug },
+            newsletter: { publicSlug: slug, ...NEWSLETTER_BETA_SCOPE },
             status: "SENT",
             sentAt: { not: null },
           },

@@ -22,7 +22,7 @@ import {
   hasGrantedWorkspaceAccess,
 } from "@/helpers/vendor-grants";
 import prisma from "@/lib/db/prisma";
-import { isNewsletterEnabled } from "@/lib/newsletter/feature";
+import { isNewsletterWorkspaceEnabled } from "@/lib/newsletter/feature";
 import {
   type AuthenticationContext,
   requirePersonalSokoBotAuthContext,
@@ -277,6 +277,8 @@ export async function readWorkspaceCalendar(
     !query.assigneeId &&
     !query.assigneeUserId &&
     !query.status;
+  const includeNewsletters =
+    includePosts && (await isNewsletterWorkspaceEnabled(workspaceId));
   if (query.to.getTime() > Date.now() + RUN_HORIZON_MS) {
     const latestPost = includePosts
       ? await prisma.socialPost.aggregate({
@@ -289,18 +291,17 @@ export async function readWorkspaceCalendar(
           _max: { scheduledAt: true },
         })
       : null;
-    const latestIssue =
-      includePosts && isNewsletterEnabled()
-        ? await prisma.newsletterIssue.aggregate({
-            where: scheduledNewsletterIssueWhere(
-              workspaceId,
-              userId,
-              query.scope,
-              options.projectId,
-            ),
-            _max: { scheduledAt: true },
-          })
-        : null;
+    const latestIssue = includeNewsletters
+      ? await prisma.newsletterIssue.aggregate({
+          where: scheduledNewsletterIssueWhere(
+            workspaceId,
+            userId,
+            query.scope,
+            options.projectId,
+          ),
+          _max: { scheduledAt: true },
+        })
+      : null;
     const latest =
       [latestPost?._max.scheduledAt, latestIssue?._max.scheduledAt]
         .filter((at): at is Date => at != null)
@@ -641,7 +642,7 @@ export async function readWorkspaceCalendar(
       sourceType: "PROJECT",
     });
   });
-  const newsletters = includePosts
+  const newsletters = includeNewsletters
     ? await readNewsletterCalendar(
         workspaceId,
         userId,

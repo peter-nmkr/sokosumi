@@ -40,7 +40,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useFormatter, useTranslations } from "next-intl";
+import { useFormatter, useLocale, useTranslations } from "next-intl";
 import {
   parseAsBoolean,
   parseAsString,
@@ -96,6 +96,7 @@ import { useMountEffect } from "@/hooks/use-mount-effect";
 import { CalendarRealtimeBridge } from "@/lib/ably/calendar-realtime-bridge";
 import { coreClient } from "@/lib/clients/core.browser.client";
 import {
+  formatTimezoneLabel,
   getDefaultTimezone,
   getTimezoneOptions,
 } from "@/lib/schedules/timezones";
@@ -874,6 +875,7 @@ export function WorkspaceCalendar({
   socialPostsOnly = false,
 }: WorkspaceCalendarProps) {
   const t = useTranslations("App.Calendar");
+  const locale = useLocale();
   const tFilters = useTranslations("App.Tasks.Filters");
   const tPostStatus = useTranslations("App.Projects.SocialPosts.status");
   const formatDate = useFormatter().dateTime;
@@ -1396,7 +1398,9 @@ export function WorkspaceCalendar({
       value: timeZone,
       options: getTimezoneOptions(timeZone).map((timezone) => ({
         value: timezone,
-        label: timezone,
+        label: formatTimezoneLabel(timezone, locale, date),
+        shortLabel: formatTimezoneLabel(timezone, locale, date, "short"),
+        searchKeywords: [timezone],
       })),
       onChange: (timezone: string | null) =>
         void setState(
@@ -1468,11 +1472,15 @@ export function WorkspaceCalendar({
           // in, since the zone picker sits behind the filters. On a phone it
           // goes under the controls rather than between their two rows.
           <span
-            className="text-muted-foreground inline-flex items-center gap-1 text-xs max-md:order-last max-md:w-full"
+            className="text-muted-foreground inline-flex min-w-0 items-center gap-1 text-xs max-md:order-last max-md:w-full"
             data-testid="calendar-timezone"
           >
-            <Clock3 className="size-3.5" aria-hidden />
-            {t("timezone.showing", { zone: timeZone.replaceAll("_", " ") })}
+            <Clock3 className="size-3.5 shrink-0" aria-hidden />
+            <span>
+              {t("timezone.showing", {
+                zone: formatTimezoneLabel(timeZone, locale, date),
+              })}
+            </span>
           </span>
         ) : null}
 
