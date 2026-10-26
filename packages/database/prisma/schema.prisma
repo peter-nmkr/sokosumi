@@ -866,6 +866,7 @@ model SocialPost {
   attempts SocialPostPublishAttempt[]
 
   @@index([projectId, status, scheduledAt])
+  @@index([workspaceId, projectId, createdAt, id], map: "social_post_workspaceId_projectId_createdAt_id_idx")
   @@index([status, scheduledAt])
   @@index([status, nextAttemptAt])
   @@index([workspaceId, scheduledAt])
