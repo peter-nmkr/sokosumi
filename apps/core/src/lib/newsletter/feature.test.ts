@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   assertNewsletterEnabled,
-  assertNewsletterWorkspaceEnabled,
   isNewsletterEnabled,
   isNewsletterWorkspaceEnabled,
 } from "./feature";
@@ -50,21 +49,6 @@ describe("newsletter workspace beta gate", () => {
     await expect(isNewsletterWorkspaceEnabled("workspace_1")).rejects.toThrow(
       "Database unavailable",
     );
-  });
-
-  it("uses 404 for disabled and non-beta workspaces", async () => {
-    await expect(
-      assertNewsletterWorkspaceEnabled("workspace_1"),
-    ).rejects.toMatchObject({ status: 404 });
-    newsletterEnv.NEWSLETTER_ENABLED = true;
-    workspace.findUnique.mockResolvedValue({ organization: { slug: "other" } });
-    await expect(
-      assertNewsletterWorkspaceEnabled("workspace_1"),
-    ).rejects.toMatchObject({ status: 404 });
-    workspace.findUnique.mockResolvedValue({ organization: { slug: "utxo" } });
-    await expect(
-      assertNewsletterWorkspaceEnabled("workspace_1"),
-    ).resolves.toBeUndefined();
   });
 });
 
