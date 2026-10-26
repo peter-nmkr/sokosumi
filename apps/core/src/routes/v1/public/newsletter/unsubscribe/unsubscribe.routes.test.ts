@@ -134,6 +134,22 @@ describe("public newsletter unsubscribe", () => {
     expect(m.eventCreate).toHaveBeenCalledOnce();
   });
 
+  it("unsubscribes after contact deletion without contact or beta-workspace lookups", async () => {
+    m.findUnique.mockResolvedValue({
+      ...NEWSLETTER_SUBSCRIBER,
+      contactId: null,
+      newsletter: NEWSLETTER,
+    });
+    const response = await app().request(URL, { method: "POST" });
+    expect(response.status).toBe(200);
+    expect(m.findUnique).toHaveBeenCalledExactlyOnceWith({
+      where: { id: NEWSLETTER_SUBSCRIBER_ID, newsletterId: NEWSLETTER_ID },
+      include: { newsletter: { select: { name: true } } },
+    });
+    expect(m.updateMany).toHaveBeenCalledOnce();
+    expect(m.eventCreate).toHaveBeenCalledOnce();
+  });
+
   it.each(["GET", "POST"])(
     "hides %s even with a missing token while disabled",
     async (method) => {

@@ -23,6 +23,12 @@ const m = vi.hoisted(() => ({
   updateMany: vi.fn(),
   eventCreate: vi.fn(),
   transaction: vi.fn(),
+  update: vi.fn(),
+  contactCreateMany: vi.fn(),
+  channelCreateMany: vi.fn(),
+  listCreate: vi.fn(),
+  listMembers: vi.fn(),
+  newsletterUpdate: vi.fn(),
   send: vi.fn(),
   redis: vi.fn(),
 }));
@@ -51,6 +57,7 @@ vi.mock("@/lib/db/prisma", () => ({
       createMany: m.createMany,
       findUnique: m.subscriber,
       updateMany: m.updateMany,
+      update: m.update,
     },
     newsletterEvent: { create: m.eventCreate },
     $transaction: m.transaction,
@@ -59,6 +66,7 @@ vi.mock("@/lib/db/prisma", () => ({
 
 const URL = `http://localhost/v1/public/newsletters/${NEWSLETTER.publicSlug}/subscribe`;
 const ACK = { status: "check_your_inbox" };
+const LIST_ID = "77777777-7777-4777-8777-777777777777";
 
 function app() {
   const app = new OpenAPIHono<EnvVariables>();
@@ -93,19 +101,39 @@ beforeEach(() => {
   m.domain = "news.example.com";
   m.newsletter.mockResolvedValue(NEWSLETTER);
   m.createMany.mockResolvedValue({ count: 1 });
-  m.subscriber.mockResolvedValue({
+  m.listCreate.mockResolvedValue({ id: LIST_ID });
+  m.subscriber.mockImplementation(async () => ({
     ...NEWSLETTER_SUBSCRIBER,
     status: "PENDING",
     source: "SIGNUP_FORM",
-  });
+    contactId: m.createMany.mock.lastCall?.[0].data.contactId ?? null,
+  }));
   m.updateMany.mockResolvedValue({ count: 1 });
   m.send.mockResolvedValue({ data: { id: "confirmation" }, error: null });
   m.redis.mockResolvedValue(1);
   const tx = {
+    newsletter: { findUniqueOrThrow: m.newsletter, update: m.newsletterUpdate },
+    contact: {
+      findMany: vi.fn(async () => []),
+      createMany: m.contactCreateMany,
+    },
+    contactChannel: {
+      findMany: vi.fn(async () => []),
+      createMany: m.channelCreateMany,
+    },
+    contactActivity: { createMany: vi.fn() },
+    contactList: {
+      findMany: vi.fn(async () => []),
+      findUnique: vi.fn(async () => null),
+      create: m.listCreate,
+      update: vi.fn(),
+    },
+    contactListMember: { createMany: m.listMembers },
     newsletterSubscriber: {
       createMany: m.createMany,
       findUnique: m.subscriber,
       updateMany: m.updateMany,
+      update: m.update,
     },
     newsletterEvent: { create: m.eventCreate },
   };
@@ -147,6 +175,7 @@ describe("public newsletter signup", () => {
     expect(m.createMany).toHaveBeenCalledWith({
       data: {
         newsletterId: NEWSLETTER_ID,
+        contactId: expect.any(String),
         email: "reader@example.com",
         name: "Ada",
         status: "PENDING",
@@ -155,6 +184,30 @@ describe("public newsletter signup", () => {
       },
       skipDuplicates: true,
     });
+    const person = m.contactCreateMany.mock.calls[0][0].data[0];
+    expect(person).toMatchObject({
+      name: "Ada",
+      workspaceId: NEWSLETTER.workspaceId,
+      createdByUserId: null,
+      createdBySokoBotId: null,
+    });
+    expect(m.createMany.mock.calls[0][0].data.contactId).toBe(person.id);
+    expect(m.channelCreateMany.mock.calls[0][0].data).toEqual([
+      expect.objectContaining({
+        contactId: person.id,
+        type: "EMAIL",
+        value: "reader@example.com",
+        source: "OTHER",
+      }),
+    ]);
+    expect(m.listMembers.mock.calls[0][0].data).toEqual([
+      {
+        contactId: person.id,
+        listId: LIST_ID,
+        addedByUserId: null,
+        addedBySokoBotId: null,
+      },
+    ]);
     expect(m.eventCreate).toHaveBeenCalledExactlyOnceWith({
       data: {
         newsletterId: NEWSLETTER_ID,

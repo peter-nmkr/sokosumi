@@ -22189,6 +22189,13 @@ export const NewsletterSchema = {
             type: 'string',
             format: 'uuid'
         },
+        contactListId: {
+            type: [
+                'string',
+                'null'
+            ],
+            format: 'uuid'
+        },
         name: {
             type: 'string'
         },
@@ -22235,6 +22242,7 @@ export const NewsletterSchema = {
         'id',
         'projectId',
         'workspaceId',
+        'contactListId',
         'name',
         'senderName',
         'replyTo',
@@ -23055,6 +23063,29 @@ export const NewsletterSubscriberSchema = {
                 'null'
             ]
         },
+        contact: {
+            anyOf: [
+                {
+                    type: 'object',
+                    properties: {
+                        id: {
+                            type: 'string',
+                            format: 'uuid'
+                        },
+                        name: {
+                            type: 'string'
+                        }
+                    },
+                    required: [
+                        'id',
+                        'name'
+                    ]
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
         status: {
             $ref: '#/components/schemas/NewsletterSubscriberStatus'
         },
@@ -23104,6 +23135,7 @@ export const NewsletterSubscriberSchema = {
         'newsletterId',
         'email',
         'name',
+        'contact',
         'status',
         'source',
         'consentAt',
@@ -23130,7 +23162,8 @@ export const NewsletterSubscriberSourceSchema = {
         'MANUAL',
         'CSV_IMPORT',
         'SIGNUP_FORM',
-        'API'
+        'API',
+        'CONTACTS'
     ]
 } as const;
 

@@ -24,6 +24,8 @@ import {
   newsletterBrandSchema,
   type SubscribeNewsletterRequest,
 } from "@/schemas/newsletter.schema";
+import { inContactTransaction } from "@/services/contacts.service";
+import { linkNewsletterContacts } from "@/services/newsletter-contacts.service";
 
 const CONFIRMATION_RESEND_MS = 10 * 60_000;
 
@@ -51,10 +53,24 @@ export async function subscribeToNewsletter(
   if (!(await allowNewsletterSignup(newsletter.id, request))) return;
 
   const now = new Date();
-  const subscriber = await prisma.$transaction(async (tx) => {
+  const subscriber = await inContactTransaction(async (tx) => {
+    const contacts = await linkNewsletterContacts(
+      tx,
+      newsletter.id,
+      {
+        workspaceId: newsletter.workspaceId,
+        userId: null,
+        sokoBotId: null,
+      },
+      [input],
+      "OTHER",
+    );
+    const contact = contacts.get(input.email);
+    if (!contact) throw notFound("Contact not found");
     const { count: created } = await tx.newsletterSubscriber.createMany({
       data: {
         newsletterId: newsletter.id,
+        contactId: contact.id,
         email: input.email,
         name: input.name,
         status: "PENDING",
@@ -69,6 +85,12 @@ export async function subscribeToNewsletter(
       },
     });
     if (!subscriber) return null;
+    if (subscriber.contactId !== contact.id) {
+      await tx.newsletterSubscriber.update({
+        where: { id: subscriber.id },
+        data: { contactId: contact.id },
+      });
+    }
     if (!created) {
       if (subscriber.status === "ACTIVE" || subscriber.status === "BOUNCED")
         return null;
