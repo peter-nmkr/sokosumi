@@ -129,6 +129,7 @@ beforeEach(() => {
   const tx = {
     newsletterIssue: {
       updateMany: m.updateMany,
+      deleteMany: m.deleteMany,
       findUniqueOrThrow: m.findUniqueOrThrow,
     },
   };
