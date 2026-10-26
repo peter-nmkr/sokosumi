@@ -11,15 +11,17 @@ export default async function NewsletterIssuePage({
 }) {
   if (!(await newsletterService.isEnabled())) notFound();
   const { projectId, issueId } = await params;
-  const [issue, subscribers, newsletter] = await Promise.all([
-    newsletterService.getIssue(projectId, issueId),
+  const issue = await newsletterService.getIssue(projectId, issueId);
+  if (!issue) notFound();
+  // After the issue check, so a missing project shows not found, not an error.
+  const [subscribers, newsletter] = await Promise.all([
     newsletterService.listSubscribers(projectId, {
       limit: 1,
       status: "ACTIVE",
     }),
     newsletterService.getSettings(projectId),
   ]);
-  if (!issue || !newsletter) notFound();
+  if (!newsletter) notFound();
   return (
     <NewsletterIssueEditor
       key={issue.id}

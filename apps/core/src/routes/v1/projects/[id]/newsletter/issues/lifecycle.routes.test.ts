@@ -13,6 +13,7 @@ import {
 } from "@/test/newsletter";
 import mountApprove from "./[issueId]/approve/post";
 import mountCancel from "./[issueId]/cancel/post";
+import mountDelete from "./[issueId]/delete";
 import mountPatch from "./[issueId]/patch";
 import mountSchedule from "./[issueId]/schedule/post";
 import mountSendNow from "./[issueId]/send-now/post";
@@ -24,10 +25,12 @@ const m = vi.hoisted(() => ({
   domain: "news.example.com",
   authorized: true,
   project: vi.fn(),
+  workspace: vi.fn(),
   newsletter: vi.fn(),
   issue: vi.fn(),
   update: vi.fn(),
   updateMany: vi.fn(),
+  remove: vi.fn(),
   read: vi.fn(),
   createTask: vi.fn(),
   task: vi.fn(),
@@ -54,9 +57,14 @@ vi.mock("@/helpers/coworker-user-context-binding", () => ({
     return { userId: "user_1", organizationId: null };
   },
 }));
-vi.mock("@/services/task-domain.service", () => ({
-  createTaskForActor: m.createTask,
-}));
+vi.mock("@/services/task-domain.service", async (original) => {
+  const actual =
+    await original<typeof import("@/services/task-domain.service")>();
+  return {
+    createTaskForActor: m.createTask,
+    archiveTaskRecord: actual.archiveTaskRecord,
+  };
+});
 vi.mock("@/services/newsletter-send.service", () => ({
   sendNewsletterIssue: m.send,
 }));
@@ -65,6 +73,7 @@ vi.mock("@/lib/db/prisma", () => {
   const tx = {
     newsletterIssue: {
       updateMany: m.updateMany,
+      deleteMany: m.remove,
       update: m.update,
       findUniqueOrThrow: m.read,
     },
@@ -81,6 +90,7 @@ vi.mock("@/lib/db/prisma", () => {
       ...tx,
       user: { findMany: m.users },
       project: { findFirst: m.project },
+      workspace: { findUnique: m.workspace },
       newsletter: { findUnique: m.newsletter },
       newsletterIssue: { ...tx.newsletterIssue, findUnique: m.issue },
       $transaction: (fn: (client: typeof tx) => Promise<unknown>) => fn(tx),
@@ -131,6 +141,7 @@ function app(actor: AuthenticationContext = USER) {
     mountSendNow,
     mountCancel,
     mountPatch,
+    mountDelete,
   ].forEach((mount) => mount(app));
   app.onError(errorHandler);
   return app;
@@ -162,6 +173,7 @@ beforeEach(() => {
   m.enabled = true;
   m.domain = "news.example.com";
   m.authorized = true;
+  m.workspace.mockResolvedValue({ organization: { slug: "utxo" } });
   m.project.mockResolvedValue({
     id: NEWSLETTER_PROJECT_ID,
     closingAt: null,
@@ -171,6 +183,7 @@ beforeEach(() => {
   m.users.mockResolvedValue([{ id: "user_1", name: "Ada" }]);
   m.issue.mockResolvedValue(NEWSLETTER_ISSUE);
   m.updateMany.mockResolvedValue({ count: 1 });
+  m.remove.mockResolvedValue({ count: 1 });
   m.read.mockResolvedValue({ ...NEWSLETTER_ISSUE, revision: 1 });
   m.createTask.mockResolvedValue({ id: "task_1" });
   m.task.mockResolvedValue({
@@ -240,6 +253,41 @@ describe("newsletter approval and delivery", () => {
     ).toBe(403);
     expect(m.createTask).not.toHaveBeenCalled();
   });
+  it.each(["submit", "approve", "schedule", "send-now", "cancel"])(
+    "hides %s outside the beta workspace before lifecycle changes",
+    async (action) => {
+      m.workspace.mockResolvedValue({ organization: { slug: "other" } });
+      const response = await request(action, {
+        revision: 0,
+        scheduledAt: "2026-10-24T10:00:00Z",
+        timezone: "UTC",
+      });
+      expect(response.status).toBe(404);
+      expect(m.updateMany).not.toHaveBeenCalled();
+      expect(m.createTask).not.toHaveBeenCalled();
+      expect(m.send).not.toHaveBeenCalled();
+    },
+  );
+  it.each(["workspace", "project"] as const)(
+    "applies the beta gate to shared %s Soko Bots",
+    async (scope) => {
+      m.workspace.mockResolvedValue({ organization: { slug: "other" } });
+      const actor: AuthenticationContext = {
+        actor: "sokoBot",
+        scope,
+        sokoBotId: BOT.sokoBotId,
+        userId: null,
+        organizationId: "org_1",
+        workspaceId: NEWSLETTER_WORKSPACE_ID,
+        projectId: scope === "project" ? NEWSLETTER_PROJECT_ID : null,
+      };
+      expect((await request("submit", { revision: 0 }, actor)).status).toBe(
+        404,
+      );
+      expect(m.createTask).not.toHaveBeenCalled();
+      expect(m.project).not.toHaveBeenCalled();
+    },
+  );
   it("updates the approval Task title when an edited issue is resubmitted", async () => {
     issue("DRAFT");
     m.task.mockResolvedValue({
@@ -466,6 +514,94 @@ describe("newsletter approval and delivery", () => {
     expect(m.taskUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ data: { status: "READY" } }),
     );
+  });
+  it.each(["schedule", "cancel"])(
+    "rejects agent and non-session %s with 403",
+    async (action) => {
+      issue(action === "cancel" ? "SCHEDULED" : "NEEDS_APPROVAL", true);
+      const input = {
+        revision: 0,
+        scheduledAt: "2026-10-24T10:00:00Z",
+        timezone: "UTC",
+      };
+      for (const actor of [
+        COWORKER,
+        BOT,
+        { ...USER, authenticationMethod: "api_key" as const },
+      ]) {
+        expect((await request(action, input, actor)).status).toBe(403);
+      }
+      expect(m.updateMany).not.toHaveBeenCalled();
+    },
+  );
+  it("cancels a scheduled issue whose approval Task was archived or moved", async () => {
+    issue("SCHEDULED", true);
+    m.task.mockResolvedValue(null);
+    expect((await request("cancel")).status).toBe(200);
+    expect(m.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "DRAFT", scheduledAt: null }),
+      }),
+    );
+    expect(m.taskUpdate).not.toHaveBeenCalled();
+  });
+  it("edits an issue whose approval Task was archived or moved", async () => {
+    issue("NEEDS_APPROVAL", true);
+    m.task.mockResolvedValue(null);
+    const response = await app().request(BASE, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ revision: 0, subject: "New subject" }),
+    });
+    expect(response.status).toBe(200);
+    expect(m.taskUpdate).not.toHaveBeenCalled();
+  });
+  it("creates a replacement approval Task when the old one is unavailable", async () => {
+    issue("DRAFT");
+    m.task.mockResolvedValue(null);
+    m.createTask.mockResolvedValue({ id: "task_2" });
+    expect((await request("submit")).status).toBe(200);
+    expect(m.createTask).toHaveBeenCalledOnce();
+    expect(m.update).toHaveBeenCalledWith({
+      where: { id: NEWSLETTER_ISSUE.id },
+      data: { taskId: "task_2" },
+    });
+    expect(m.taskMetadata).not.toHaveBeenCalled();
+  });
+  it("archives the open approval Task when its draft issue is deleted", async () => {
+    issue("DRAFT");
+    m.task.mockResolvedValue({
+      id: "task_1",
+      status: "READY",
+      updatedAt: NOW,
+      archivedAt: null,
+    });
+    const response = await app().request(BASE, { method: "DELETE" });
+    expect(response.status).toBe(204);
+    expect(m.remove).toHaveBeenCalledOnce();
+    expect(m.task).toHaveBeenCalledWith({
+      where: {
+        id: "task_1",
+        projectId: NEWSLETTER_PROJECT_ID,
+        workspaceId: NEWSLETTER_WORKSPACE_ID,
+        archivedAt: null,
+      },
+    });
+    expect(m.taskUpdate).toHaveBeenCalledWith({
+      where: {
+        id: "task_1",
+        archivedAt: null,
+        status: "READY",
+        updatedAt: NOW,
+      },
+      data: { archivedAt: NOW },
+    });
+  });
+  it("deletes a draft whose approval Task is already gone", async () => {
+    issue("DRAFT");
+    m.task.mockResolvedValue(null);
+    expect((await app().request(BASE, { method: "DELETE" })).status).toBe(204);
+    expect(m.taskUpdate).not.toHaveBeenCalled();
   });
   it("rejects stale revisions and races before creating a Task", async () => {
     expect((await request("submit", { revision: 1 })).status).toBe(409);

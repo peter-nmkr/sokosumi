@@ -11,7 +11,7 @@ import {
   type OpenAPIHonoWithAuth,
   withCoworkerContextHeaderParameters,
 } from "@/lib/hono";
-import { isNewsletterEnabled } from "@/lib/newsletter/feature";
+import { isNewsletterWorkspaceEnabled } from "@/lib/newsletter/feature";
 import { requireInteractiveUserAuthContext } from "@/middleware/auth";
 import { requireWorkspaceContext } from "@/middleware/workspace";
 import {
@@ -54,6 +54,8 @@ export default function mount(app: OpenAPIHonoWithAuth) {
       await requireSocialBetaAccess(userContext.userId, prisma);
     }
     const workspaceId = workspaceContext.workspaceId;
+    const includeNewsletters =
+      includeSocialPosts && (await isNewsletterWorkspaceEnabled(workspaceId));
     const isSchedulable = await canCreateTaskSchedules(c.var);
 
     const [workspace, projects, latestPostDates, latestIssueDates] =
@@ -87,7 +89,7 @@ export default function mount(app: OpenAPIHonoWithAuth) {
               _max: { scheduledAt: true },
             })
           : [],
-        includeSocialPosts && isNewsletterEnabled()
+        includeNewsletters
           ? prisma.newsletterIssue.groupBy({
               by: ["projectId"],
               where: scheduledNewsletterIssueWhere(
@@ -145,7 +147,7 @@ export default function mount(app: OpenAPIHonoWithAuth) {
             ? {
                 latestScheduledSocialPostAt:
                   latestPostByProject.get(project.id) ?? null,
-                ...(isNewsletterEnabled()
+                ...(includeNewsletters
                   ? {
                       latestScheduledNewsletterIssueAt:
                         latestIssueByProject.get(project.id) ?? null,
