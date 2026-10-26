@@ -22,7 +22,7 @@ const route = withCoworkerContextHeaderParameters(
     path: "/{id}/newsletter/subscribers/{subscriberId}",
     tags: ["Projects"],
     description:
-      "Change a subscriber's name or switch between ACTIVE and UNSUBSCRIBED. Pending and bounced subscribers cannot change status manually.",
+      "Change a subscriber's name or unsubscribe an active subscriber. Suppressed subscribers cannot be reactivated manually.",
     request: {
       params: newsletterSubscriberParamsSchema,
       body: {

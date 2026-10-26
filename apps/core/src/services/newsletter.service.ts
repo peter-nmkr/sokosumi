@@ -4,13 +4,18 @@ import { PrismaRaw } from "@sokosumi/database/client";
 import slugify from "slugify";
 
 import { conflict, notFound } from "@/helpers/error";
+import { requireNewsletterBetaAccess } from "@/helpers/newsletter-beta-access";
 import {
   createPaginationMeta,
   parseCursorPagination,
 } from "@/helpers/pagination";
-import { isPrismaUniqueViolation } from "@/helpers/prisma";
+import {
+  isPrismaRecordNotFoundError,
+  isPrismaUniqueViolation,
+} from "@/helpers/prisma";
 import prisma from "@/lib/db/prisma";
 import { parseNewsletterCsv } from "@/lib/newsletter/csv";
+import type { AuthenticationContext } from "@/middleware/auth";
 import type {
   AddNewsletterSubscriberRequest,
   ListNewsletterSubscribersQuery,
@@ -18,8 +23,8 @@ import type {
   PutNewsletterRequest,
 } from "@/schemas/newsletter.schema";
 import {
-  type ContactActor,
   inContactTransaction,
+  resolveContactActor,
   resolveContactSummaries,
 } from "@/services/contacts.service";
 import { linkNewsletterContacts } from "@/services/newsletter-contacts.service";
@@ -32,8 +37,12 @@ export interface NewsletterScope {
 
 export async function getNewsletter(
   scope: NewsletterScope,
-  client: Pick<Prisma.TransactionClient, "project" | "newsletter"> = prisma,
+  client: Pick<
+    Prisma.TransactionClient,
+    "project" | "newsletter" | "workspace"
+  > = prisma,
 ) {
+  await requireNewsletterBetaAccess(scope.workspaceId, client);
   await requireScopedProject(scope, { client });
   const newsletter = await client.newsletter.findUnique({ where: scope });
   if (!newsletter) throw notFound("Newsletter not found");
@@ -44,6 +53,7 @@ export async function putNewsletter(
   scope: NewsletterScope,
   input: PutNewsletterRequest,
 ) {
+  await requireNewsletterBetaAccess(scope.workspaceId);
   await requireScopedProject(scope);
   const data = {
     ...input,
@@ -138,9 +148,10 @@ export async function listNewsletterSubscribers(
 export async function addNewsletterSubscriber(
   scope: NewsletterScope,
   input: AddNewsletterSubscriberRequest,
-  actor: ContactActor,
+  auth: AuthenticationContext,
 ) {
   const newsletter = await getNewsletter(scope);
+  const actor = await resolveContactActor(auth, scope.workspaceId);
   return inContactTransaction(async (tx) => {
     const contacts = await linkNewsletterContacts(
       tx,
@@ -151,6 +162,7 @@ export async function addNewsletterSubscriber(
     );
     const contact = contacts.get(input.email);
     if (!contact) throw notFound("Contact not found");
+    const now = new Date();
     try {
       const subscriber = await tx.newsletterSubscriber.create({
         data: {
@@ -160,7 +172,14 @@ export async function addNewsletterSubscriber(
           name: input.name,
           status: "ACTIVE",
           source: "MANUAL",
-          consentAt: new Date(),
+          consentAt: now,
+          events: {
+            create: {
+              newsletterId: newsletter.id,
+              type: "CONFIRMED",
+              occurredAt: now,
+            },
+          },
         },
       });
       return { ...subscriber, contact };
@@ -182,27 +201,42 @@ export async function patchNewsletterSubscriber(
   const where = { id: subscriberId, newsletterId: newsletter.id };
   const subscriber = await prisma.newsletterSubscriber.findUnique({ where });
   if (!subscriber) throw notFound("Subscriber not found");
-  if (
-    input.status &&
-    subscriber.status !== "ACTIVE" &&
-    subscriber.status !== "UNSUBSCRIBED"
-  ) {
-    throw conflict(
-      "Only active or unsubscribed subscribers can change status manually",
-    );
+  const changedStatus = input.status && input.status !== subscriber.status;
+  if (changedStatus && subscriber.status !== "ACTIVE") {
+    throw conflict("Only active subscribers can change status manually");
   }
-  const updated = await prisma.newsletterSubscriber.update({
-    where,
-    data: {
-      name: input.name,
-      status: input.status,
-      ...(input.status && input.status !== subscriber.status
-        ? {
-            unsubscribedAt: input.status === "UNSUBSCRIBED" ? new Date() : null,
-          }
-        : {}),
-    },
-  });
+  const now = new Date();
+  const updated = await prisma.newsletterSubscriber
+    .update({
+      where: {
+        ...where,
+        ...(changedStatus ? { status: subscriber.status } : {}),
+      },
+      data: {
+        name: input.name,
+        ...(changedStatus
+          ? {
+              status: input.status,
+              unsubscribedAt: now,
+              events: {
+                create: {
+                  newsletterId: newsletter.id,
+                  type: "UNSUBSCRIBED",
+                  occurredAt: now,
+                },
+              },
+            }
+          : {}),
+      },
+    })
+    .catch((error: unknown) => {
+      if (isPrismaRecordNotFoundError(error)) {
+        if (changedStatus)
+          throw conflict("Subscriber status changed. Please retry.");
+        throw notFound("Subscriber not found");
+      }
+      throw error;
+    });
   const contacts = await resolveContactSummaries(
     prisma,
     scope.workspaceId,
@@ -222,24 +256,36 @@ export async function deleteNewsletterSubscriber(
 ) {
   const newsletter = await getNewsletter(scope);
   const { count } = await prisma.newsletterSubscriber.deleteMany({
-    where: { id: subscriberId, newsletterId: newsletter.id },
+    where: {
+      id: subscriberId,
+      newsletterId: newsletter.id,
+      status: { in: ["ACTIVE", "PENDING"] },
+    },
   });
-  if (!count) throw notFound("Subscriber not found");
+  if (!count) {
+    const subscriber = await prisma.newsletterSubscriber.findUnique({
+      where: { id: subscriberId, newsletterId: newsletter.id },
+      select: { id: true },
+    });
+    if (!subscriber) throw notFound("Subscriber not found");
+    throw conflict("Only active or pending subscribers can be deleted");
+  }
 }
 
 export async function importNewsletterSubscribers(
   scope: NewsletterScope,
   csv: string,
-  actor: ContactActor,
+  auth: AuthenticationContext,
 ) {
   const newsletter = await getNewsletter(scope);
+  const actor = await resolveContactActor(auth, scope.workspaceId);
   const { subscribers, validRows, invalid } = parseNewsletterCsv(csv);
   const consentAt = new Date();
   let imported = 0;
   // Keep each insert below PostgreSQL's parameter limit for a 50k-row import.
   for (let offset = 0; offset < subscribers.length; offset += 1000) {
     const chunk = subscribers.slice(offset, offset + 1000);
-    const result = await inContactTransaction(async (tx) => {
+    imported += await inContactTransaction(async (tx) => {
       const contacts = await linkNewsletterContacts(
         tx,
         newsletter.id,
@@ -247,7 +293,7 @@ export async function importNewsletterSubscribers(
         chunk,
         "IMPORT",
       );
-      const result = await tx.newsletterSubscriber.createMany({
+      const created = await tx.newsletterSubscriber.createManyAndReturn({
         data: chunk.map((subscriber) => {
           const contact = contacts.get(subscriber.email);
           if (!contact) throw notFound("Contact not found");
@@ -261,7 +307,18 @@ export async function importNewsletterSubscribers(
           };
         }),
         skipDuplicates: true,
+        select: { id: true },
       });
+      if (created.length) {
+        await tx.newsletterEvent.createMany({
+          data: created.map(({ id }) => ({
+            newsletterId: newsletter.id,
+            subscriberId: id,
+            type: "CONFIRMED",
+            occurredAt: consentAt,
+          })),
+        });
+      }
       // Existing subscriptions retain status and consent; only their person link changes.
       await tx.$executeRaw(PrismaRaw.sql`
         UPDATE "newsletter_subscriber" AS subscriber
@@ -271,9 +328,8 @@ export async function importNewsletterSubscribers(
           AND subscriber.email = links.email
           AND subscriber."contactId" IS DISTINCT FROM links."contactId"
       `);
-      return result;
+      return created.length;
     });
-    imported += result.count;
   }
   return { imported, skippedExisting: validRows - imported, invalid };
 }

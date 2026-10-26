@@ -49,7 +49,11 @@ beforeEach(() => {
   m.sent.mockResolvedValue(10);
   m.active.mockResolvedValue(9);
   m.raw.mockImplementation((sql: Prisma.Sql) =>
-    /^\s*SELECT\s+COUNT\(DISTINCT/.test(sql.sql) ? [COUNTS] : [],
+    sql.sql.includes("AS count FROM")
+      ? [{ count: 1 }]
+      : /^\s*SELECT\s+COUNT\(DISTINCT/.test(sql.sql)
+        ? [COUNTS]
+        : [],
   );
 });
 
@@ -84,7 +88,7 @@ describe("newsletter analytics aggregation", () => {
     const aggregate = m.raw.mock.calls[0]![0] as Prisma.Sql;
     expect(aggregate.sql).toContain('COUNT(DISTINCT "subscriberId")');
     expect(aggregate.sql).toContain('COUNT(DISTINCT "sendId")');
-    expect(m.raw.mock.calls).toHaveLength(4);
+    expect(m.raw.mock.calls).toHaveLength(5);
   });
 
   it("falls back to sent counts and returns finite zeros for an empty newsletter", async () => {
@@ -133,12 +137,26 @@ describe("newsletter analytics aggregation", () => {
     expect(m.raw).not.toHaveBeenCalled();
   });
 
-  it("does no aggregates for an inaccessible project or missing newsletter", async () => {
-    m.newsletter.mockRejectedValue(notFound("Newsletter not found"));
-    await expect(getNewsletterAnalytics(SCOPE, {})).rejects.toMatchObject({
-      status: 404,
-    });
-    expect(m.raw).not.toHaveBeenCalled();
+  it.each(["project", "issue"])(
+    "rejects %s analytics for an inaccessible newsletter before aggregation",
+    async (kind) => {
+      m.newsletter.mockRejectedValue(notFound("Newsletter not found"));
+      await expect(
+        kind === "project"
+          ? getNewsletterAnalytics(SCOPE, {})
+          : getNewsletterIssueAnalytics(SCOPE, ISSUE_ID),
+      ).rejects.toMatchObject({ status: 404 });
+      expect(m.newsletter).toHaveBeenCalledExactlyOnceWith(SCOPE);
+      expect(m.raw).not.toHaveBeenCalled();
+      expect(m.sent).not.toHaveBeenCalled();
+      expect(m.issue).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reports unavailable issue unsubscribe attribution instead of zero", async () => {
+    expect(
+      (await getNewsletterIssueAnalytics(SCOPE, ISSUE_ID)).totals.unsubscribes,
+    ).toBeNull();
   });
 });
 

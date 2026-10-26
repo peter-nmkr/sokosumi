@@ -41,7 +41,9 @@ vi.mock("@/lib/db/prisma", () => ({
   default: {
     workspace: { findUnique: m.workspace },
     project: { findFirst: m.project },
-    newsletter: { findUnique: m.newsletter },
+    newsletter: {
+      findUnique: m.newsletter,
+    },
     socialPost: { findMany: m.posts },
     projectImageAsset: { findMany: m.assets },
     newsletterIssue: { create: m.create, updateMany: m.update },
@@ -142,16 +144,6 @@ beforeEach(() => {
 });
 
 describe("POST newsletter draft-with-ai with an injected fake model", () => {
-  it.each(["other", null])(
-    "hides AI drafting for workspace organization %s",
-    async (slug) => {
-      m.workspace.mockResolvedValue(newsletterWorkspace(slug));
-      expect((await draft()).status).toBe(404);
-      expect(m.generate).not.toHaveBeenCalled();
-      expect(m.create).not.toHaveBeenCalled();
-    },
-  );
-
   it("creates a DRAFT without approvals, scheduling, sends, or credit charges", async () => {
     const response = await draft();
     expect(response.status).toBe(201);
@@ -216,6 +208,7 @@ describe("POST newsletter draft-with-ai with an injected fake model", () => {
           workspaceId: NEWSLETTER_WORKSPACE_ID,
         },
         take: 10,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         select: { text: true },
       }),
     );
@@ -305,6 +298,31 @@ describe("POST newsletter draft-with-ai with an injected fake model", () => {
     expect(m.copy).not.toHaveBeenCalled();
     expect(m.generate).not.toHaveBeenCalled();
   });
+
+  it.each(["other", null])(
+    "rejects workspace organization %s before reading draft sources",
+    async (slug) => {
+      m.workspace.mockResolvedValue(newsletterWorkspace(slug));
+      const response = await draft({
+        ...INPUT,
+        useProjectMemory: true,
+        useRecentSocialPosts: true,
+        imageIds: [IMAGE_ID],
+      });
+      expect(response.status).toBe(404);
+      expect(m.workspace).toHaveBeenCalledWith({
+        where: { id: NEWSLETTER_WORKSPACE_ID },
+        select: { organization: { select: { slug: true } } },
+      });
+      expect(m.project).not.toHaveBeenCalled();
+      expect(m.posts).not.toHaveBeenCalled();
+      expect(m.assets).not.toHaveBeenCalled();
+      expect(m.copy).not.toHaveBeenCalled();
+      expect(m.generate).not.toHaveBeenCalled();
+      expect(m.create).not.toHaveBeenCalled();
+      expect(m.eval).not.toHaveBeenCalled();
+    },
+  );
 
   it("limits generation with a shared project counter before model calls", async () => {
     m.eval.mockResolvedValue(11);

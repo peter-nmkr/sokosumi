@@ -25,8 +25,9 @@ export async function hasNewsletterBetaAccess(
 
 export async function requireNewsletterBetaAccess(
   workspaceId: string,
+  client: Pick<Prisma.TransactionClient, "workspace"> = prisma,
 ): Promise<void> {
-  if (!(await hasNewsletterBetaAccess(workspaceId))) {
+  if (!(await hasNewsletterBetaAccess(workspaceId, client))) {
     throw notFound("Newsletter not found");
   }
 }

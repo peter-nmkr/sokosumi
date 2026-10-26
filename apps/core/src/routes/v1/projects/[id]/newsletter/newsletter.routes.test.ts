@@ -35,7 +35,6 @@ const m = vi.hoisted(() => ({
   findUnique: vi.fn(),
   update: vi.fn(),
   deleteMany: vi.fn(),
-  createMany: vi.fn(),
   transaction: vi.fn(),
   executeRaw: vi.fn(),
   newsletterUpdate: vi.fn(),
@@ -50,6 +49,8 @@ const m = vi.hoisted(() => ({
   listCreate: vi.fn(),
   listUpdate: vi.fn(),
   memberCreateMany: vi.fn(),
+  createManyAndReturn: vi.fn(),
+  createEvents: vi.fn(),
 }));
 
 vi.mock("@/config/env", async (importOriginal) => {
@@ -59,8 +60,8 @@ vi.mock("@/config/env", async (importOriginal) => {
     getEnv: () => ({ ...actual.getEnv(), NEWSLETTER_ENABLED: m.enabled }),
   };
 });
-vi.mock("@/lib/db/prisma", () => ({
-  default: {
+vi.mock("@/lib/db/prisma", () => {
+  const client = {
     workspace: { findUnique: m.workspace },
     member: { findUnique: vi.fn(async () => ({ userId: "user_1" })) },
     project: { findFirst: m.projectFindFirst },
@@ -94,10 +95,14 @@ vi.mock("@/lib/db/prisma", () => ({
       findUnique: m.findUnique,
       update: m.update,
       deleteMany: m.deleteMany,
-      createMany: m.createMany,
+      createManyAndReturn: m.createManyAndReturn,
     },
-  },
-}));
+    newsletterEvent: { createMany: m.createEvents },
+  };
+  return {
+    default: client,
+  };
+});
 
 const PROJECT_ID = "11111111-1111-4111-8111-111111111111";
 const WORKSPACE_ID = "22222222-2222-4222-8222-222222222222";
@@ -239,10 +244,9 @@ beforeEach(() => {
   m.findUnique.mockResolvedValue(SUBSCRIBER);
   m.update.mockResolvedValue(SUBSCRIBER);
   m.deleteMany.mockResolvedValue({ count: 1 });
-  m.createMany.mockImplementation(
-    ({ data }: { data: Prisma.NewsletterSubscriberCreateManyInput[] }) => ({
-      count: data.length,
-    }),
+  m.createManyAndReturn.mockImplementation(
+    ({ data }: { data: Prisma.NewsletterSubscriberCreateManyInput[] }) =>
+      data.map((_, index) => ({ id: `subscriber-${index}` })),
   );
 });
 
@@ -259,7 +263,7 @@ describe("Project newsletter access", () => {
       expect(m.newsletterFindUnique).not.toHaveBeenCalled();
       expect(m.newsletterUpsert).not.toHaveBeenCalled();
       expect(m.create).not.toHaveBeenCalled();
-      expect(m.createMany).not.toHaveBeenCalled();
+      expect(m.createManyAndReturn).not.toHaveBeenCalled();
     },
   );
 
@@ -276,7 +280,7 @@ describe("Project newsletter access", () => {
     expect(m.newsletterFindUnique).not.toHaveBeenCalled();
     expect(m.newsletterUpsert).not.toHaveBeenCalled();
     expect(m.create).not.toHaveBeenCalled();
-    expect(m.createMany).not.toHaveBeenCalled();
+    expect(m.createManyAndReturn).not.toHaveBeenCalled();
   });
 
   it("requires authentication and a workspace on every route", async () => {
@@ -332,7 +336,7 @@ describe("Project newsletter access", () => {
       404, 200, 404, 404, 404, 404, 404,
     ]);
     expect(m.create).not.toHaveBeenCalled();
-    expect(m.createMany).not.toHaveBeenCalled();
+    expect(m.createManyAndReturn).not.toHaveBeenCalled();
   });
 });
 
@@ -437,6 +441,13 @@ describe("newsletter subscribers", () => {
         status: "ACTIVE",
         source: "MANUAL",
         consentAt: expect.any(Date),
+        events: {
+          create: {
+            newsletterId: NEWSLETTER_ID,
+            type: "CONFIRMED",
+            occurredAt: expect.any(Date),
+          },
+        },
       },
     });
     const person = m.contactCreateMany.mock.calls[0][0].data[0];
@@ -713,35 +724,28 @@ describe("newsletter subscribers", () => {
     );
     expect(response.status).toBe(200);
     expect(m.update).toHaveBeenCalledWith({
-      where: { id: SUBSCRIBER_ID, newsletterId: NEWSLETTER_ID },
+      where: {
+        id: SUBSCRIBER_ID,
+        newsletterId: NEWSLETTER_ID,
+        status: "ACTIVE",
+      },
       data: {
         name: null,
         status: "UNSUBSCRIBED",
         unsubscribedAt: expect.any(Date),
+        events: {
+          create: {
+            newsletterId: NEWSLETTER_ID,
+            type: "UNSUBSCRIBED",
+            occurredAt: expect.any(Date),
+          },
+        },
       },
     });
   });
 
-  it("reactivates an unsubscribed subscriber and clears the unsubscribe time", async () => {
-    m.findUnique.mockResolvedValue({
-      ...SUBSCRIBER,
-      status: "UNSUBSCRIBED",
-      unsubscribedAt: NOW,
-    });
-    const response = await createApp().request(
-      `${BASE}/subscribers/${SUBSCRIBER_ID}`,
-      json("PATCH", { status: "ACTIVE" }),
-    );
-    expect(response.status).toBe(200);
-    expect(m.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: { name: undefined, status: "ACTIVE", unsubscribedAt: null },
-      }),
-    );
-  });
-
-  it.each(["PENDING", "BOUNCED"])(
-    "cannot manually leave %s",
+  it.each(["PENDING", "UNSUBSCRIBED", "BOUNCED"])(
+    "cannot manually reactivate %s",
     async (status) => {
       m.findUnique.mockResolvedValue({ ...SUBSCRIBER, status });
       const response = await createApp().request(
@@ -771,7 +775,7 @@ describe("newsletter subscribers", () => {
     expect(response.status).toBe(200);
     expect(m.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: { name: "New name", status: undefined },
+        data: { name: "New name" },
       }),
     );
   });
@@ -788,7 +792,76 @@ describe("newsletter subscribers", () => {
     );
     expect(response.status).toBe(200);
     expect(m.update.mock.calls[0][0].data).not.toHaveProperty("unsubscribedAt");
+    expect(m.update.mock.calls[0][0].data).not.toHaveProperty("events");
+    expect(m.update.mock.calls[0][0].data).not.toHaveProperty("status");
   });
+
+  it.each(["UNSUBSCRIBED", "BOUNCED"])(
+    "does not overwrite a concurrent %s during a status change",
+    async (status) => {
+      const current = { ...SUBSCRIBER, status };
+      m.update.mockImplementation(({ where, data }) => {
+        if (where.status !== current.status)
+          return Promise.reject({ code: "P2025" });
+        Object.assign(current, data);
+        return current;
+      });
+      const response = await createApp().request(
+        `${BASE}/subscribers/${SUBSCRIBER_ID}`,
+        json("PATCH", { status: "UNSUBSCRIBED" }),
+      );
+      expect(response.status).toBe(409);
+      expect(current.status).toBe(status);
+      expect(current.unsubscribedAt).toBeNull();
+    },
+  );
+
+  it.each(["UNSUBSCRIBED", "BOUNCED"])(
+    "does not overwrite a concurrent %s when ACTIVE is unchanged",
+    async (status) => {
+      const current = { ...SUBSCRIBER, status, unsubscribedAt: NOW };
+      m.update.mockImplementation(async ({ data }) =>
+        Object.assign(current, data),
+      );
+      const response = await createApp().request(
+        `${BASE}/subscribers/${SUBSCRIBER_ID}`,
+        json("PATCH", { name: "New name", status: "ACTIVE" }),
+      );
+      expect(response.status).toBe(200);
+      expect(current).toMatchObject({
+        status,
+        name: "New name",
+        unsubscribedAt: NOW,
+      });
+      const data = m.update.mock.calls[0][0].data;
+      expect(data).not.toHaveProperty("status");
+      expect(data).not.toHaveProperty("unsubscribedAt");
+      expect(data).not.toHaveProperty("events");
+    },
+  );
+
+  it.each(["UNSUBSCRIBED", "BOUNCED"])(
+    "retains a %s suppression record on deletion, including concurrent suppression",
+    async (status) => {
+      m.findUnique.mockResolvedValue({ ...SUBSCRIBER, status });
+      m.deleteMany.mockImplementation(({ where }) => ({
+        count: where.status.in.includes(status) ? 1 : 0,
+      }));
+      const response = await createApp().request(
+        `${BASE}/subscribers/${SUBSCRIBER_ID}`,
+        { method: "DELETE" },
+      );
+      expect(response.status).toBe(409);
+      expect(m.deleteMany).toHaveBeenCalledExactlyOnceWith({
+        where: {
+          id: SUBSCRIBER_ID,
+          newsletterId: NEWSLETTER_ID,
+          status: { in: ["ACTIVE", "PENDING"] },
+        },
+      });
+      expect(m.create).not.toHaveBeenCalled();
+    },
+  );
 
   it("scopes updates to this newsletter and rejects absent or foreign subscribers", async () => {
     m.findUnique.mockResolvedValue(null);
@@ -803,25 +876,37 @@ describe("newsletter subscribers", () => {
     expect(m.update).not.toHaveBeenCalled();
   });
 
-  it("deletes only within this newsletter and returns 404 for an absent subscriber", async () => {
-    const app = createApp();
-    const response = await app.request(`${BASE}/subscribers/${SUBSCRIBER_ID}`, {
-      method: "DELETE",
-    });
-    expect(response.status).toBe(204);
-    expect(await response.text()).toBe("");
-    expect(m.deleteMany).toHaveBeenCalledWith({
-      where: { id: SUBSCRIBER_ID, newsletterId: NEWSLETTER_ID },
-    });
-    m.deleteMany.mockResolvedValue({ count: 0 });
-    expect(
-      (
-        await app.request(`${BASE}/subscribers/${SUBSCRIBER_ID}`, {
+  it.each(["ACTIVE", "PENDING"])(
+    "deletes %s only within this newsletter and returns 404 for an absent subscriber",
+    async (status) => {
+      m.findUnique.mockResolvedValue({ ...SUBSCRIBER, status });
+      const app = createApp();
+      const response = await app.request(
+        `${BASE}/subscribers/${SUBSCRIBER_ID}`,
+        {
           method: "DELETE",
-        })
-      ).status,
-    ).toBe(404);
-  });
+        },
+      );
+      expect(response.status).toBe(204);
+      expect(await response.text()).toBe("");
+      expect(m.deleteMany).toHaveBeenCalledWith({
+        where: {
+          id: SUBSCRIBER_ID,
+          newsletterId: NEWSLETTER_ID,
+          status: { in: ["ACTIVE", "PENDING"] },
+        },
+      });
+      m.deleteMany.mockResolvedValue({ count: 0 });
+      m.findUnique.mockResolvedValue(null);
+      expect(
+        (
+          await app.request(`${BASE}/subscribers/${SUBSCRIBER_ID}`, {
+            method: "DELETE",
+          })
+        ).status,
+      ).toBe(404);
+    },
+  );
 });
 
 describe("newsletter subscriber CSV import", () => {
@@ -847,7 +932,7 @@ describe("newsletter subscriber CSV import", () => {
         (contact: { name: string }) => contact.name,
       ),
     ).toEqual(["Bea", "Cy"]);
-    const rows = m.createMany.mock.calls[0][0].data;
+    const rows = m.createManyAndReturn.mock.calls[0][0].data;
     expect(rows).toHaveLength(3);
     expect(rows[0].contactId).toBe(CONTACT_ID);
     expect(
@@ -872,7 +957,7 @@ describe("newsletter subscriber CSV import", () => {
       ["bounce@example.com", "BOUNCED"],
       ["pending@example.com", "PENDING"],
     ]);
-    m.createMany.mockImplementation(
+    m.createManyAndReturn.mockImplementation(
       ({
         data,
         skipDuplicates,
@@ -881,13 +966,13 @@ describe("newsletter subscriber CSV import", () => {
         skipDuplicates: boolean;
       }) => {
         expect(skipDuplicates).toBe(true);
-        let count = 0;
+        const created: { id: string }[] = [];
         for (const row of data) {
           if (existing.has(row.email)) continue;
           existing.set(row.email, row.status ?? "PENDING");
-          count++;
+          created.push({ id: row.email });
         }
-        return { count };
+        return created;
       },
     );
     const csv =
@@ -907,7 +992,15 @@ describe("newsletter subscriber CSV import", () => {
     expect(existing.get("old@example.com")).toBe("UNSUBSCRIBED");
     expect(existing.get("bounce@example.com")).toBe("BOUNCED");
     expect(existing.get("pending@example.com")).toBe("PENDING");
-    expect(m.createMany.mock.calls[0][0].data).toContainEqual({
+    expect(m.createEvents).toHaveBeenCalledExactlyOnceWith({
+      data: ["ada@example.com", "bea@example.com"].map((id) => ({
+        newsletterId: NEWSLETTER_ID,
+        subscriberId: id,
+        type: "CONFIRMED",
+        occurredAt: expect.any(Date),
+      })),
+    });
+    expect(m.createManyAndReturn.mock.calls[0][0].data).toContainEqual({
       newsletterId: NEWSLETTER_ID,
       contactId: expect.any(String),
       email: "ada@example.com",
@@ -927,7 +1020,7 @@ describe("newsletter subscriber CSV import", () => {
         json("POST", { csv: "email\na@example.com", consent }),
       );
       expect(response.status).toBe(422);
-      expect(m.createMany).not.toHaveBeenCalled();
+      expect(m.createManyAndReturn).not.toHaveBeenCalled();
     },
   );
 
@@ -939,7 +1032,7 @@ describe("newsletter subscriber CSV import", () => {
         json("POST", { csv, consent: true }),
       );
       expect(response.status).toBe(422);
-      expect(m.createMany).not.toHaveBeenCalled();
+      expect(m.createManyAndReturn).not.toHaveBeenCalled();
     },
   );
 
@@ -956,7 +1049,7 @@ describe("newsletter subscriber CSV import", () => {
         invalid: [{ row: 2, value: "bad" }],
       },
     });
-    expect(m.createMany).not.toHaveBeenCalled();
+    expect(m.createManyAndReturn).not.toHaveBeenCalled();
   });
 
   it("accepts and batches 50,000 rows below PostgreSQL's parameter limit", async () => {
@@ -969,13 +1062,29 @@ describe("newsletter subscriber CSV import", () => {
     expect(await response.json()).toMatchObject({
       data: { imported: 50_000, skippedExisting: 0, invalid: [] },
     });
-    expect(m.createMany).toHaveBeenCalledTimes(50);
     expect(m.contactCreateMany).toHaveBeenCalledTimes(50);
     expect(m.memberCreateMany).toHaveBeenCalledTimes(50);
     expect(m.executeRaw).toHaveBeenCalledTimes(50);
+    expect(m.createManyAndReturn).toHaveBeenCalledTimes(50);
+    expect(m.createEvents).toHaveBeenCalledTimes(50);
     expect(
-      m.createMany.mock.calls.every(([input]) => input.data.length === 1000),
+      m.createManyAndReturn.mock.calls.every(
+        ([input]) => input.data.length === 1000,
+      ),
     ).toBe(true);
+  });
+
+  it("does not record activations for an import containing only existing subscribers", async () => {
+    m.createManyAndReturn.mockResolvedValue([]);
+    const response = await createApp().request(
+      `${BASE}/subscribers/import`,
+      json("POST", { csv: "email\nold@example.com", consent: true }),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      data: { imported: 0, skippedExisting: 1 },
+    });
+    expect(m.createEvents).not.toHaveBeenCalled();
   });
 
   it("enforces 5 MB by UTF-8 bytes", async () => {
@@ -984,6 +1093,6 @@ describe("newsletter subscriber CSV import", () => {
       json("POST", { csv: "é".repeat(2_500_001), consent: true }),
     );
     expect(response.status).toBe(422);
-    expect(m.createMany).not.toHaveBeenCalled();
+    expect(m.createManyAndReturn).not.toHaveBeenCalled();
   });
 });
