@@ -134,8 +134,40 @@ describe("public newsletter unsubscribe", () => {
     expect(m.eventCreate).toHaveBeenCalledOnce();
   });
 
+  it("keeps confirmation and one-click unsubscribe working while disabled", async () => {
+    m.enabled = false;
+    const server = app();
+    const confirmation = await server.request(URL);
+    expect(confirmation.status).toBe(200);
+    expect(await confirmation.text()).toContain("Confirm unsubscribe");
+    expect(m.updateMany).not.toHaveBeenCalled();
+
+    for (let i = 0; i < 2; i++) {
+      const response = await server.request(URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "List-Unsubscribe=One-Click",
+      });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("You are unsubscribed");
+    }
+    expect(m.findUnique).toHaveBeenCalledWith({
+      where: { id: NEWSLETTER_SUBSCRIBER_ID, newsletterId: NEWSLETTER_ID },
+      include: { newsletter: { select: { name: true } } },
+    });
+    expect(m.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: NEWSLETTER_SUBSCRIBER_ID,
+        newsletterId: NEWSLETTER_ID,
+        status: { not: "UNSUBSCRIBED" },
+      },
+      data: { status: "UNSUBSCRIBED", unsubscribedAt: expect.any(Date) },
+    });
+    expect(m.eventCreate).toHaveBeenCalledOnce();
+  });
+
   it.each(["GET", "POST"])(
-    "hides %s even with a missing token while disabled",
+    "requires a token for %s even while disabled",
     async (method) => {
       m.enabled = false;
       expect(
@@ -145,7 +177,7 @@ describe("public newsletter unsubscribe", () => {
             { method },
           )
         ).status,
-      ).toBe(404);
+      ).toBe(422);
       expect(m.findUnique).not.toHaveBeenCalled();
       expect(m.updateMany).not.toHaveBeenCalled();
     },
